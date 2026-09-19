@@ -2,6 +2,7 @@
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { ErrorAlert } from '@/components/ui/error-alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -226,12 +227,7 @@ export function UploadForm({ categories, defaultCategoryId, onSuccess }: UploadF
         </Alert>
       )}
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle>上传失败</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      {error && <ErrorAlert title="上传失败" message={error} />}
 
       {uploaded.length > 0 && (
         <div className="space-y-3">

@@ -2,6 +2,7 @@
 
 import { LoadingButton } from '@/components/loading-button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { ErrorAlert } from '@/components/ui/error-alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { signIn } from 'next-auth/react';
@@ -89,12 +90,7 @@ export function LoginForm({ onSuccess }: { onSuccess?: () => void } = {}) {
           required
         />
       </div>
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle>登录失败</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      {error && <ErrorAlert title="登录失败" message={error} />}
       {pendingHint && (
         <Alert>
           <AlertTitle>登录受限</AlertTitle>

@@ -1,4 +1,5 @@
-import { auth } from '@/lib/auth';
+import { getViewer } from '@/lib/access';
+import { categoryWhereFor } from '@/lib/access-rules';
 import { requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import {
@@ -10,7 +11,6 @@ import {
   getPublicThumbnailUrl,
   isNotFoundError,
 } from '@/lib/storage';
-import type { CategoryVisibility, Prisma } from '@prisma/client';
 import JSZip from 'jszip';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -62,18 +62,11 @@ export async function GET(request: Request) {
   const page = Math.max(Number.parseInt(pageParam, 10) || 1, 1);
   const pageSize = Math.min(Math.max(Number.parseInt(pageSizeParam, 10) || 24, 1), 96);
 
-  const session = await auth();
-  const internalVisibilities: CategoryVisibility[] = ['internal', 'public'];
-  const visibilityFilter: Prisma.PhotoWhereInput = !session?.user
-    ? { category: { visibility: 'public' } }
-    : session.user.role === 'admin'
-      ? {}
-      : { category: { visibility: { in: internalVisibilities } } };
-
   const parsedCategoryId = categoryIdParam ? Number.parseInt(categoryIdParam, 10) : undefined;
-  const where: Prisma.PhotoWhereInput = {
+  const viewer = await getViewer();
+  const where = {
     ...(Number.isInteger(parsedCategoryId) ? { categoryId: parsedCategoryId } : {}),
-    ...visibilityFilter,
+    category: categoryWhereFor(viewer),
   };
 
   const photos = (await prisma.photo.findMany({
@@ -133,8 +126,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
+  // 打包下载同样受可见性约束：否则只要猜到 id，就能取到无权浏览的相册原图
   const photos = await prisma.photo.findMany({
-    where: { id: { in: parsed.data.ids } },
+    where: { id: { in: parsed.data.ids }, category: categoryWhereFor(authCheck.viewer) },
     select: {
       id: true,
       filename: true,
@@ -209,12 +203,8 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ deleted: 0 }, { status: 200 });
   }
 
-  const requesterId = Number.parseInt(authCheck.session.user!.id, 10);
-  if (Number.isNaN(requesterId)) {
-    return NextResponse.json({ error: '用户信息异常' }, { status: 400 });
-  }
-
-  const isAdmin = authCheck.session.user?.role === 'admin';
+  const requesterId = authCheck.viewer.id;
+  const isAdmin = authCheck.viewer.role === 'admin';
   const unauthorized = targetPhotos.filter(photo => photo.uploaderId !== requesterId && !isAdmin);
   if (unauthorized.length > 0) {
     return NextResponse.json({ error: '仅可操作自己上传的照片' }, { status: 403 });
@@ -260,13 +250,8 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: '媒体不存在' }, { status: 404 });
   }
 
-  const requesterId = Number.parseInt(authCheck.session.user!.id, 10);
-  if (Number.isNaN(requesterId)) {
-    return NextResponse.json({ error: '用户信息异常' }, { status: 400 });
-  }
-
-  const isAdmin = authCheck.session.user?.role === 'admin';
-  if (!isAdmin && photo.uploaderId !== requesterId) {
+  const { viewer } = authCheck;
+  if (viewer.role !== 'admin' && photo.uploaderId !== viewer.id) {
     return NextResponse.json({ error: '仅可操作自己上传的照片' }, { status: 403 });
   }
 

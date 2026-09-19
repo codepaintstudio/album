@@ -1,22 +1,17 @@
 import { AccountForms } from '@/components/profile/account-forms';
-import { auth } from '@/lib/auth';
+import { getViewer } from '@/lib/access';
 import { prisma } from '@/lib/db';
 import { UserCircle } from 'lucide-react';
 import { redirect } from 'next/navigation';
 
 export default async function ProfilePage() {
-  const session = await auth();
-  if (!session?.user) {
+  const viewer = await getViewer();
+  if (!viewer) {
     redirect('/login?callbackUrl=/profile');
   }
 
-  const userId = Number.parseInt(session.user.id, 10);
-  if (Number.isNaN(userId)) {
-    redirect('/login');
-  }
-
   const user = await prisma.user.findUnique({
-    where: { id: userId },
+    where: { id: viewer.id },
     select: {
       id: true,
       username: true,

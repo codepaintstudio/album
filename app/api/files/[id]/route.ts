@@ -1,3 +1,4 @@
+import { canTouchFileSet } from '@/lib/access-rules';
 import { requireAdmin, requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import { deleteFileAsset, getPublicFileUrl } from '@/lib/storage';
@@ -19,9 +20,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
 
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
-    const session = authCheck.session;
-    const userId = Number(session.user.id);
-    const isAdmin = session.user.role === 'admin';
+    const { viewer } = authCheck;
 
     const file = await prisma.file.findUnique({
       where: { id },
@@ -44,14 +43,9 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
 
     if (!file) return NextResponse.json({ message: '未找到' }, { status: 404 });
 
-    // Permission check
-    const canView =
-      isAdmin ||
-      file.fileSet.visibility === 'public' ||
-      file.fileSet.visibility === 'internal' ||
-      file.fileSet.createdBy === userId;
-
-    if (!canView) return NextResponse.json({ message: '无权限' }, { status: 403 });
+    if (!canTouchFileSet(viewer, file.fileSet)) {
+      return NextResponse.json({ message: '无权限' }, { status: 403 });
+    }
 
     return NextResponse.json({
       item: {
@@ -88,9 +82,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
-    const session = authCheck.session;
-    const userId = Number(session.user.id);
-    const isAdmin = session.user.role === 'admin';
+    const { viewer } = authCheck;
 
     const file = await prisma.file.findUnique({
       where: { id },
@@ -100,7 +92,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     if (!file) return NextResponse.json({ message: '未找到' }, { status: 404 });
 
     // Only uploader or admin can update
-    if (!isAdmin && file.uploaderId !== userId) {
+    if (viewer.role !== 'admin' && file.uploaderId !== viewer.id) {
       return NextResponse.json({ message: '无权限' }, { status: 403 });
     }
 
@@ -152,9 +144,7 @@ export async function DELETE(_: Request, { params }: { params: Promise<{ id: str
 
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
-    const session = authCheck.session;
-    const userId = Number(session.user.id);
-    const isAdmin = session.user.role === 'admin';
+    const { viewer } = authCheck;
 
     const file = await prisma.file.findUnique({
       where: { id },
@@ -164,7 +154,7 @@ export async function DELETE(_: Request, { params }: { params: Promise<{ id: str
     if (!file) return NextResponse.json({ message: '未找到' }, { status: 404 });
 
     // Only uploader or admin can delete
-    if (!isAdmin && file.uploaderId !== userId) {
+    if (viewer.role !== 'admin' && file.uploaderId !== viewer.id) {
       return NextResponse.json({ message: '无权限' }, { status: 403 });
     }
 

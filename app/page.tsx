@@ -1,16 +1,34 @@
 import { SearchTrigger } from '@/components/search-trigger';
+import { CategoryGridSkeleton } from '@/components/skeletons/category-grid-skeleton';
 import { SortToggle } from '@/components/sort-toggle';
 import { Card } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { UploadDialog } from '@/components/upload-dialog';
-import { auth } from '@/lib/auth';
+import { getViewer } from '@/lib/access';
+import { type Visibility, categoryWhereFor } from '@/lib/access-rules';
 import { prisma } from '@/lib/db';
 import { getPublicThumbnailUrl } from '@/lib/storage';
-import type { CategoryVisibility, Prisma } from '@prisma/client';
 import { Images } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { Suspense } from 'react';
 
-export default async function HomePage({
+/** 首页不做分页：相册是人工创建的，这个上限只是防止无界负载 */
+const CATEGORY_CAP = 200;
+
+export default function HomePage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  return (
+    <Suspense fallback={<CategoryGridSkeleton />}>
+      <HomeContent searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function HomeContent({
   searchParams,
 }: {
   searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
@@ -18,26 +36,22 @@ export default async function HomePage({
   const params = (await searchParams) ?? {};
   const sort =
     (typeof params['sort'] === 'string' ? params['sort'] : undefined) === 'asc' ? 'asc' : 'desc';
-  const session = await auth();
+  const viewer = await getViewer();
   type CategoryCard = {
     id: number;
     name: string;
     description: string | null;
-    visibility: CategoryVisibility;
+    visibility: Visibility;
     createdAt: Date;
     photos: Array<{ filename: string; createdAt: Date }>;
     _count: { photos: number };
   };
-  const internalVisibilities: CategoryVisibility[] = ['internal', 'public'];
-  const where: Prisma.CategoryWhereInput = !session?.user
-    ? { visibility: 'public' }
-    : session.user.role === 'admin'
-      ? {}
-      : { visibility: { in: internalVisibilities } };
+  const where = categoryWhereFor(viewer);
 
   const categories = (await prisma.category.findMany({
     where,
     orderBy: { createdAt: sort },
+    take: CATEGORY_CAP,
     include: {
       _count: { select: { photos: true } },
       photos: {
@@ -65,7 +79,7 @@ export default async function HomePage({
           <SearchTrigger />
           <SortToggle />
         </div>
-        {session?.user && categories.length > 0 && (
+        {viewer && categories.length > 0 && (
           <div className="flex items-center gap-2">
             <UploadDialog
               categories={categories.map(category => ({
@@ -81,7 +95,10 @@ export default async function HomePage({
       </div>
 
       {categories.length === 0 ? (
-        <EmptyState />
+        <EmptyState
+          icon={<Images className="text-primary h-10 w-10" />}
+          title="暂无相册，请先在控制台中创建分类。"
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {categories.map(category => (
@@ -110,6 +127,12 @@ export default async function HomePage({
           ))}
         </div>
       )}
+
+      {categories.length >= CATEGORY_CAP ? (
+        <p className="text-muted-foreground text-center text-xs">
+          相册过多，仅显示前 {CATEGORY_CAP} 个。
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -126,15 +149,6 @@ function ImageFill({ filename }: { filename: string }) {
         className="object-cover"
         unoptimized
       />
-    </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="text-muted-foreground flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-10">
-      <Images className="text-primary h-10 w-10" />
-      <p>暂无相册，请先在控制台中创建分类。</p>
     </div>
   );
 }

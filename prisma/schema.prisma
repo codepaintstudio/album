@@ -45,6 +45,8 @@ model Photo {
   category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   uploader     User     @relation(fields: [uploaderId], references: [id])
   createdAt    DateTime @default(now())
+
+  @@index([categoryId, createdAt])
 }
 
 model ShareLink {

@@ -1,13 +1,15 @@
+import { canTouchFileSet } from '@/lib/access-rules';
 import { requireAdmin, requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import { deleteFileAsset } from '@/lib/storage';
+import { visibilitySchema } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 const updateSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).optional(),
-  visibility: z.enum(['private', 'internal', 'public']).optional(),
+  visibility: visibilitySchema.optional(),
 });
 
 /**
@@ -21,8 +23,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
 
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
-    const userId = Number(authCheck.session.user.id);
-    const isAdmin = authCheck.session.user.role === 'admin';
+    const { viewer } = authCheck;
 
     const item = await prisma.fileSet.findUnique({
       where: { id },
@@ -40,14 +41,9 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
 
     if (!item) return NextResponse.json({ message: '未找到' }, { status: 404 });
 
-    // Permission check: private (admin only), internal/public (authenticated), or creator
-    const canView =
-      isAdmin ||
-      item.visibility === 'public' ||
-      item.visibility === 'internal' ||
-      item.createdBy === userId;
-
-    if (!canView) return NextResponse.json({ message: '无权限' }, { status: 403 });
+    if (!canTouchFileSet(viewer, item)) {
+      return NextResponse.json({ message: '无权限' }, { status: 403 });
+    }
 
     return NextResponse.json({
       item: {

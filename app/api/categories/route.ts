@@ -1,16 +1,15 @@
-import { auth } from '@/lib/auth';
+import { getViewer } from '@/lib/access';
+import { type Visibility, categoryWhereFor } from '@/lib/access-rules';
 import { requireAdmin } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
-import type { CategoryVisibility, Prisma } from '@prisma/client';
+import { visibilitySchema } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-
-const visibilityEnum = z.enum(['private', 'internal', 'public'] satisfies CategoryVisibility[]);
 
 const categoryCreateSchema = z.object({
   name: z.string().min(1, '分类名称不能为空'),
   description: z.string().optional(),
-  visibility: visibilityEnum.default('internal'),
+  visibility: visibilitySchema.default('internal'),
 });
 
 const categoryUpdateSchema = categoryCreateSchema.extend({
@@ -26,18 +25,13 @@ type CategoryWithCount = {
   name: string;
   description: string | null;
   createdAt: Date;
-  visibility: CategoryVisibility;
+  visibility: Visibility;
   _count: { photos: number };
 };
 
 export async function GET() {
-  const session = await auth();
-  const internalVisibilities: CategoryVisibility[] = ['internal', 'public'];
-  const where: Prisma.CategoryWhereInput = !session?.user
-    ? { visibility: 'public' }
-    : session.user.role === 'admin'
-      ? {}
-      : { visibility: { in: internalVisibilities } };
+  const viewer = await getViewer();
+  const where = categoryWhereFor(viewer);
 
   const categories = (await prisma.category.findMany({
     where,

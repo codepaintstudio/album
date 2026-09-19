@@ -1,12 +1,14 @@
+import { fileSetWhereFor } from '@/lib/access-rules';
 import { requireAdmin, requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
+import { visibilitySchema } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 const createSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
-  visibility: z.enum(['private', 'internal', 'public']).default('internal'),
+  visibility: visibilitySchema.default('internal'),
 });
 
 /**
@@ -17,23 +19,8 @@ export async function GET(req: Request) {
   try {
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
-    const session = authCheck.session;
-    const userId = Number(session.user.id);
-    const isAdmin = session.user.role === 'admin';
 
-    // Visibility logic:
-    // - private: admin only
-    // - internal: all authenticated users
-    // - public: everyone (but we require auth in this endpoint)
-    const where = isAdmin
-      ? {} // Admin sees all
-      : {
-          OR: [
-            { visibility: 'internal' as const },
-            { visibility: 'public' as const },
-            { createdBy: userId },
-          ],
-        };
+    const where = fileSetWhereFor(authCheck.viewer);
 
     type FileSetItem = {
       id: number;
@@ -78,7 +65,6 @@ export async function POST(req: Request) {
   try {
     const adminCheck = await requireAdmin();
     if (!adminCheck.ok) return adminCheck.error;
-    const session = adminCheck.session;
 
     const body = await req.json().catch(() => undefined);
     const parsed = createSchema.safeParse(body);
@@ -94,7 +80,7 @@ export async function POST(req: Request) {
         name: parsed.data.name,
         description: parsed.data.description,
         visibility: parsed.data.visibility,
-        createdBy: Number(session.user.id),
+        createdBy: adminCheck.viewer.id,
       },
       select: {
         id: true,

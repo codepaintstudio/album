@@ -1,3 +1,4 @@
+import { canUploadToCategory } from '@/lib/access-rules';
 import { requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import {
@@ -46,15 +47,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: '分类不存在' }, { status: 404 });
   }
 
-  const isAdmin = authCheck.session.user?.role === 'admin';
-  if (category.visibility === 'private' && !isAdmin) {
+  const { viewer } = authCheck;
+  if (!canUploadToCategory(viewer, category)) {
     return NextResponse.json({ error: '无权在该分类上传' }, { status: 403 });
   }
 
-  const uploaderId = Number.parseInt(authCheck.session.user!.id, 10);
-  if (Number.isNaN(uploaderId)) {
-    return NextResponse.json({ error: '用户信息异常' }, { status: 400 });
-  }
+  const uploaderId = viewer.id;
 
   try {
     const isImage = file.type.startsWith('image/');

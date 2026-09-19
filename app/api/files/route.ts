@@ -1,3 +1,4 @@
+import { canTouchFileSet } from '@/lib/access-rules';
 import { requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import { deleteFileAsset, getPublicFileUrl, persistFile } from '@/lib/storage';
@@ -22,9 +23,7 @@ export async function GET(req: Request) {
   try {
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
-    const session = authCheck.session;
-    const userId = Number(session.user.id);
-    const isAdmin = session.user.role === 'admin';
+    const { viewer } = authCheck;
 
     const url = new URL(req.url);
     const filesetId = url.searchParams.get('filesetId');
@@ -44,13 +43,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: '文件集不存在' }, { status: 404 });
     }
 
-    const canView =
-      isAdmin ||
-      fileset.visibility === 'public' ||
-      fileset.visibility === 'internal' ||
-      fileset.createdBy === userId;
-
-    if (!canView) {
+    if (!canTouchFileSet(viewer, fileset)) {
       return NextResponse.json({ message: '无权限' }, { status: 403 });
     }
 
@@ -97,9 +90,7 @@ export async function POST(req: Request) {
   try {
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
-    const session = authCheck.session;
-    const userId = Number(session.user.id);
-    const isAdmin = session.user.role === 'admin';
+    const { viewer } = authCheck;
 
     const formData = await req.formData();
     const file = formData.get('file') as File | null;
@@ -122,15 +113,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: '文件集不存在' }, { status: 404 });
     }
 
-    // Only admin or members can upload to private fileset
-    // Internal/public filesets allow all authenticated users
-    const canUpload =
-      isAdmin ||
-      fileset.createdBy === userId ||
-      fileset.visibility === 'internal' ||
-      fileset.visibility === 'public';
-
-    if (!canUpload) {
+    if (!canTouchFileSet(viewer, fileset)) {
       return NextResponse.json({ message: '无权限上传' }, { status: 403 });
     }
 
@@ -146,7 +129,7 @@ export async function POST(req: Request) {
         mimeType: file.type || 'application/octet-stream',
         size: file.size,
         filesetId,
-        uploaderId: userId,
+        uploaderId: viewer.id,
       },
       select: {
         id: true,

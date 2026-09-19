@@ -25,10 +25,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
-  const userId = Number.parseInt(authCheck.session.user!.id, 10);
-  if (Number.isNaN(userId)) {
-    return NextResponse.json({ error: '用户信息异常' }, { status: 400 });
-  }
+  const userId = authCheck.viewer.id;
 
   if (parsed.data.type === 'username') {
     const exists = await prisma.user.findUnique({ where: { username: parsed.data.username } });

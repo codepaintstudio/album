@@ -2,6 +2,7 @@
 
 import { LoadingButton } from '@/components/loading-button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { ErrorAlert } from '@/components/ui/error-alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { FormEvent, useState } from 'react';
@@ -103,12 +104,7 @@ export function RegisterForm({
           <AlertDescription>{message}</AlertDescription>
         </Alert>
       )}
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle>注册失败</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      {error && <ErrorAlert title="注册失败" message={error} />}
       <LoadingButton type="submit" className="w-full" loading={isSubmitting}>
         注册
       </LoadingButton>

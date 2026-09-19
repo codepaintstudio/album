@@ -1,11 +1,13 @@
 import { LoginTabs } from '@/components/profile/login-tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { auth } from '@/lib/auth';
+import { getViewer } from '@/lib/access';
 import { redirect } from 'next/navigation';
 
 export default async function LoginPage() {
-  const session = await auth();
-  if (session?.user) {
+  // 用 getViewer 而不是 auth()：被拒绝/待审核的账号可能仍持有旧 JWT，
+  // 若按会话存在就跳回首页，会与 /profile 等地的 requireViewer 形成重定向死循环。
+  const viewer = await getViewer();
+  if (viewer) {
     redirect('/');
   }
 

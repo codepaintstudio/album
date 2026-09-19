@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { ErrorAlert } from '@/components/ui/error-alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useState } from 'react';
@@ -17,10 +18,12 @@ export function FilesUploadDialog({
   open,
   onClose,
   onUpload,
+  error,
 }: {
   open: boolean;
   onClose: () => void;
   onUpload: (file: File) => Promise<void>;
+  error?: string | null;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -52,6 +55,7 @@ export function FilesUploadDialog({
               disabled={uploading}
             />
           </div>
+          {error ? <ErrorAlert message={error} /> : null}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={uploading}>

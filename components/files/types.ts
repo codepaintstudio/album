@@ -2,7 +2,6 @@ export type FileSet = {
   id: number;
   name: string;
   description: string | null;
-  visibility: string;
   fileCount: number;
 };
 

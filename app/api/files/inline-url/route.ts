@@ -1,3 +1,4 @@
+import { canTouchFileSet } from '@/lib/access-rules';
 import { requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import { getPresignedInlineFileUrl } from '@/lib/storage';
@@ -11,9 +12,7 @@ export async function GET(req: Request) {
   try {
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
-    const session = authCheck.session;
-    const userId = Number(session.user.id);
-    const isAdmin = session.user.role === 'admin';
+    const { viewer } = authCheck;
 
     const url = new URL(req.url);
     const fileIdStr = url.searchParams.get('fileId');
@@ -39,13 +38,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: '文件不存在' }, { status: 404 });
     }
 
-    const canView =
-      isAdmin ||
-      file.fileSet.visibility === 'public' ||
-      file.fileSet.visibility === 'internal' ||
-      file.fileSet.createdBy === userId;
-
-    if (!canView) {
+    if (!canTouchFileSet(viewer, file.fileSet)) {
       return NextResponse.json({ message: '无权限' }, { status: 403 });
     }
 

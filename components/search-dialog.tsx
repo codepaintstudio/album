@@ -2,6 +2,7 @@
 
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import {
   Table,
@@ -130,7 +131,7 @@ export function SearchDialog({ open, onOpenChange, categoryId }: SearchDialogPro
           {loading && <p className="text-muted-foreground text-sm">搜索中...</p>}
           {error && <p className="text-destructive text-sm">{error}</p>}
           {!loading && !error && !hasResults && debounced && (
-            <p className="text-muted-foreground text-sm">没有匹配结果</p>
+            <EmptyState className="p-6" title="没有匹配结果" />
           )}
 
           {results.categories.length > 0 && (
