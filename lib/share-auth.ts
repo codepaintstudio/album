@@ -2,8 +2,19 @@ import { cookies } from 'next/headers';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import 'server-only';
 
-/** 解锁会话最长 8 小时，且不超过分享链接本身的有效期 */
+/** 解锁凭证最长 8 小时，且不超过分享链接本身的有效期 */
 const MAX_UNLOCK_MINUTES = 8 * 60;
+
+/**
+ * Secure 必须跟"实际用的协议"走，而不是 NODE_ENV：`next start` 在生产模式下
+ * NODE_ENV=production，但用 http 提供服务时浏览器会直接丢弃 Secure cookie，
+ * 表现为密码正确却仍停在门后。NEXTAUTH_URL 是应用对外地址，以它为准。
+ */
+function cookieSecure(): boolean {
+  const publicUrl = process.env.NEXTAUTH_URL;
+  if (publicUrl) return publicUrl.startsWith('https://');
+  return process.env.NODE_ENV === 'production';
+}
 
 function gateValue(token: string): string {
   const secret = process.env.NEXTAUTH_SECRET;
@@ -42,7 +53,7 @@ export function buildUnlockCookie(token: string, expiresAt: Date | null) {
     options: {
       httpOnly: true,
       sameSite: 'lax' as const,
-      secure: process.env.NODE_ENV === 'production',
+      secure: cookieSecure(),
       path: `/share/${token}`,
       maxAge: minutes * 60,
     },
