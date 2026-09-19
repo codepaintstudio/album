@@ -1,6 +1,6 @@
 'use client';
 
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import type { FileSetItem } from '@/components/admin/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { ErrorAlert } from '@/components/ui/error-alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -29,26 +30,18 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-
-interface FileSetItem {
-  id: number;
-  name: string;
-  description: string | null;
-  visibility: 'private' | 'internal' | 'public';
-  fileCount: number;
-  createdAt: string;
-}
+import { useState, useTransition } from 'react';
 
 interface AdminFileSetsProps {
   filesets: FileSetItem[];
 }
 
-export function AdminFileSets({ filesets: initialFileSets }: AdminFileSetsProps) {
+export function AdminFileSets({ filesets }: AdminFileSetsProps) {
   const router = useRouter();
-  const [filesets, setFilesets] = useState<FileSetItem[]>(initialFileSets);
+  const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   // Create/Edit dialog state
@@ -103,13 +96,8 @@ export function AdminFileSets({ filesets: initialFileSets }: AdminFileSetsProps)
         throw new Error(json?.message || '操作失败');
       }
 
-      // Refresh filesets list
-      const listRes = await fetch('/api/filesets');
-      const listJson = await listRes.json();
-      setFilesets(listJson.items || []);
-
       setShowDialog(false);
-      router.refresh();
+      startTransition(() => router.refresh());
     } catch (e: any) {
       setError(e?.message || '操作失败');
     } finally {
@@ -133,9 +121,7 @@ export function AdminFileSets({ filesets: initialFileSets }: AdminFileSetsProps)
         throw new Error(json?.message || '删除失败');
       }
 
-      // Remove from local state
-      setFilesets(filesets.filter(fs => fs.id !== id));
-      router.refresh();
+      startTransition(() => router.refresh());
     } catch (e: any) {
       setError(e?.message || '删除失败');
     }
@@ -167,13 +153,14 @@ export function AdminFileSets({ filesets: initialFileSets }: AdminFileSetsProps)
         </Button>
       </div>
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      {error && <ErrorAlert message={error} />}
 
-      <div className="rounded-md border">
+      <div
+        className={cn(
+          'rounded-md border transition-opacity',
+          isPending && 'pointer-events-none opacity-60'
+        )}
+      >
         <Table>
           <TableHeader>
             <TableRow>

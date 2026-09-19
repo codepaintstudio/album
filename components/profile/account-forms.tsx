@@ -3,6 +3,7 @@
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ErrorAlert } from '@/components/ui/error-alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useRouter } from 'next/navigation';
@@ -116,12 +117,7 @@ function UpdateUsernameForm({ defaultUsername }: { defaultUsername: string }) {
               <AlertDescription>{message}</AlertDescription>
             </Alert>
           )}
-          {error && (
-            <Alert variant="destructive">
-              <AlertTitle>修改失败</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
+          {error && <ErrorAlert title="修改失败" message={error} />}
           <Button type="submit" disabled={isPending}>
             {isPending ? '保存中...' : '保存'}
           </Button>
@@ -227,12 +223,7 @@ function UpdatePasswordForm() {
               <AlertDescription>{message}</AlertDescription>
             </Alert>
           )}
-          {error && (
-            <Alert variant="destructive">
-              <AlertTitle>修改失败</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
+          {error && <ErrorAlert title="修改失败" message={error} />}
           <Button type="submit" disabled={isPending}>
             {isPending ? '保存中...' : '保存'}
           </Button>

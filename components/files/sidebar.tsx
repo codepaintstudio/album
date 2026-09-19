@@ -1,16 +1,19 @@
 'use client';
 
-import { FileSet } from './types';
+import { useQueryParamWriter } from '@/lib/query-state';
+import { cn } from '@/lib/utils';
+
+import type { FileSet } from './types';
 
 export function FilesSidebar({
   fileSets,
   activeFileSetId,
-  onSelect,
 }: {
   fileSets: FileSet[];
   activeFileSetId: number | null;
-  onSelect: (id: number) => void;
 }) {
+  const setParam = useQueryParamWriter();
+
   return (
     <aside className="hidden w-64 shrink-0 md:block">
       <div className="rounded-md border p-3">
@@ -19,12 +22,13 @@ export function FilesSidebar({
           {fileSets.map(fs => (
             <button
               key={fs.id}
-              className={`hover:bg-muted w-full rounded px-3 py-2 text-left text-sm transition-colors ${
-                activeFileSetId === fs.id ? 'bg-muted font-medium' : ''
-              }`}
-              onClick={() => onSelect(fs.id)}
+              className={cn(
+                'hover:bg-muted w-full rounded px-3 py-2 text-left text-sm transition-colors',
+                activeFileSetId === fs.id && 'bg-muted font-medium'
+              )}
+              onClick={() => setParam('fileset', String(fs.id))}
             >
-              <div className="justify之间 flex items-center">
+              <div className="flex items-center justify-between">
                 <span className="truncate">{fs.name}</span>
                 <span className="text-muted-foreground text-xs">{fs.fileCount}</span>
               </div>

@@ -1,6 +1,5 @@
 'use client';
 
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -10,6 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { ErrorAlert } from '@/components/ui/error-alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -20,13 +20,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { useShallowIdParam, useShallowParam } from '@/lib/query-state';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { Play } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { Fragment, useCallback, useMemo, useState } from 'react';
+import { Fragment, useCallback, useMemo, useState, useTransition } from 'react';
 
 interface PhotoItem {
   id: number;
@@ -55,15 +56,30 @@ export function PhotoGrid({
   downloadStrategy = 'api',
 }: PhotoGridProps) {
   const router = useRouter();
-  const [activePhoto, setActivePhoto] = useState<PhotoItem | null>(null);
+  // router.refresh() 本身没有视觉反馈，用一次 transition 让列表在刷新时变暗
+  const [isPending, startTransition] = useTransition();
+  // 灯箱由 ?photo= 驱动：打开时 pushState，浏览器返回键先关灯箱而不离开页面
+  const [activePhotoId, setActivePhotoId] = useShallowIdParam('photo');
+  const activePhoto = useMemo(
+    () => photos.find(photo => String(photo.id) === activePhotoId) ?? null,
+    [photos, activePhotoId]
+  );
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState('');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [zoomLevel, setZoomLevel] = useState<'day' | 'month' | 'year'>('day');
+  const [viewMode, setViewMode] = useShallowParam<'grid' | 'list'>(
+    'view',
+    ['grid', 'list'],
+    'grid'
+  );
+  const [zoomLevel, setZoomLevel] = useShallowParam<'day' | 'month' | 'year'>(
+    'group',
+    ['day', 'month', 'year'],
+    'day'
+  );
   const [pinchDistance, setPinchDistance] = useState<number | null>(null);
 
   const groups = useMemo(() => {
@@ -167,7 +183,7 @@ export function PhotoGrid({
         throw new Error(payload.error ?? '删除失败');
       }
       clearSelection();
-      router.refresh();
+      startTransition(() => router.refresh());
     } catch (error) {
       const message = error instanceof Error ? error.message : '删除失败';
       setActionError(message);
@@ -212,7 +228,7 @@ export function PhotoGrid({
       }
       setRenameOpen(false);
       clearSelection();
-      router.refresh();
+      startTransition(() => router.refresh());
     } catch (error) {
       const message = error instanceof Error ? error.message : '重命名失败';
       setActionError(message);
@@ -273,10 +289,10 @@ export function PhotoGrid({
       if (selectionMode) {
         toggleSelection(photo.id);
       } else {
-        setActivePhoto(photo);
+        setActivePhotoId(String(photo.id));
       }
     },
-    [selectionMode, toggleSelection]
+    [selectionMode, toggleSelection, setActivePhotoId]
   );
 
   const handleCopyLink = useCallback((photo: PhotoItem) => {
@@ -291,7 +307,7 @@ export function PhotoGrid({
       if (prev === 'month') return 'day';
       return 'day';
     });
-  }, []);
+  }, [setZoomLevel]);
 
   const handleZoomOut = useCallback(() => {
     setZoomLevel(prev => {
@@ -299,7 +315,7 @@ export function PhotoGrid({
       if (prev === 'month') return 'year';
       return 'year';
     });
-  }, []);
+  }, [setZoomLevel]);
 
   const handleWheel = useCallback(
     (event: React.WheelEvent) => {
@@ -471,12 +487,7 @@ export function PhotoGrid({
         </div>
       </div>
 
-      {actionError ? (
-        <Alert variant="destructive" className="mb-4">
-          <AlertTitle>操作失败</AlertTitle>
-          <AlertDescription>{actionError}</AlertDescription>
-        </Alert>
-      ) : null}
+      {actionError ? <ErrorAlert title="操作失败" message={actionError} className="mb-4" /> : null}
 
       {selectionMode && selectedCount > 0 ? (
         <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -516,7 +527,10 @@ export function PhotoGrid({
 
       {viewMode === 'grid' ? (
         <div
-          className="space-y-6"
+          className={cn(
+            'space-y-6',
+            isPending && 'pointer-events-none opacity-60 transition-opacity'
+          )}
           onWheel={handleWheel}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
@@ -638,7 +652,12 @@ export function PhotoGrid({
           ))}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border">
+        <div
+          className={cn(
+            'overflow-hidden rounded-lg border',
+            isPending && 'pointer-events-none opacity-60 transition-opacity'
+          )}
+        >
           <Table>
             <TableHeader>
               <TableRow>
@@ -773,7 +792,7 @@ export function PhotoGrid({
         open={!!activePhoto}
         onOpenChange={open => {
           if (!open) {
-            setActivePhoto(null);
+            setActivePhotoId(null);
           }
         }}
       >
@@ -792,7 +811,7 @@ export function PhotoGrid({
                 <Button
                   variant="ghost"
                   className="text-white hover:text-white"
-                  onClick={() => setActivePhoto(null)}
+                  onClick={() => setActivePhotoId(null)}
                 >
                   关闭
                 </Button>
