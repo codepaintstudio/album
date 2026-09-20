@@ -1,6 +1,7 @@
 import { requireAdmin } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import { ConfigurationError, getPublicObjectUrl, getPublicThumbnailUrl } from '@/lib/storage';
+import { idSchema } from '@/lib/validation';
 import bcrypt from 'bcryptjs';
 import { addHours, isAfter } from 'date-fns';
 import { NextResponse } from 'next/server';
@@ -31,7 +32,7 @@ type ShareLinkWithCategory = {
 };
 
 const createShareSchema = z.object({
-  categoryId: z.number().int(),
+  categoryId: idSchema,
   password: z.string().min(4).max(50).optional(),
   expireInHours: z.number().int().positive().max(720).optional(),
 });
@@ -42,7 +43,7 @@ const shareAccessSchema = z.object({
 });
 
 const deleteShareSchema = z.object({
-  id: z.number().int(),
+  id: idSchema,
 });
 
 export async function POST(request: Request) {

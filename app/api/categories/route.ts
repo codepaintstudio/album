@@ -2,7 +2,8 @@ import { getViewer } from '@/lib/access';
 import { type Visibility, categoryWhereFor } from '@/lib/access-rules';
 import { requireAdmin } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
-import { visibilitySchema } from '@/lib/validation';
+import { prismaErrorResponse } from '@/lib/prisma-errors';
+import { idSchema, visibilitySchema } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -13,11 +14,11 @@ const categoryCreateSchema = z.object({
 });
 
 const categoryUpdateSchema = categoryCreateSchema.extend({
-  id: z.number().int(),
+  id: idSchema,
 });
 
 const categoryDeleteSchema = z.object({
-  id: z.number().int(),
+  id: idSchema,
 });
 
 type CategoryWithCount = {
@@ -85,15 +86,20 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: parseResult.error.flatten().fieldErrors }, { status: 400 });
   }
 
-  const category = await prisma.category.update({
-    where: { id: parseResult.data.id },
-    data: {
-      name: parseResult.data.name,
-      description: parseResult.data.description,
-      visibility: parseResult.data.visibility,
-    },
-  });
-  return NextResponse.json(category);
+  try {
+    const category = await prisma.category.update({
+      where: { id: parseResult.data.id },
+      data: {
+        name: parseResult.data.name,
+        description: parseResult.data.description,
+        visibility: parseResult.data.visibility,
+      },
+    });
+    return NextResponse.json(category);
+  } catch (error) {
+    // DELETE 不在此列：它的清理与错误处理在同一个改动里落地（缺陷 B）。
+    return prismaErrorResponse(error);
+  }
 }
 
 export async function DELETE(request: Request) {

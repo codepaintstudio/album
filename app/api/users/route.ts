@@ -1,5 +1,7 @@
 import { requireAdmin } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
+import { prismaErrorResponse } from '@/lib/prisma-errors';
+import { idSchema } from '@/lib/validation';
 import type { Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { NextResponse } from 'next/server';
@@ -21,12 +23,12 @@ const createUserSchema = z.object({
 });
 
 const updateRoleSchema = z.object({
-  id: z.number().int(),
+  id: idSchema,
   role: z.enum(['admin', 'member']),
 });
 
 const updateStatusSchema = z.object({
-  id: z.number().int(),
+  id: idSchema,
   status: z.enum(['pending', 'active', 'rejected']),
 });
 
@@ -153,18 +155,22 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: '请求参数错误' }, { status: 400 });
   }
 
-  const user = await prisma.user.update({
-    where: { id: parsed.data.id },
-    data: { role: parsed.data.role },
-    select: {
-      id: true,
-      username: true,
-      role: true,
-      createdAt: true,
-    },
-  });
+  try {
+    const user = await prisma.user.update({
+      where: { id: parsed.data.id },
+      data: { role: parsed.data.role },
+      select: {
+        id: true,
+        username: true,
+        role: true,
+        createdAt: true,
+      },
+    });
 
-  return NextResponse.json(user);
+    return NextResponse.json(user);
+  } catch (error) {
+    return prismaErrorResponse(error);
+  }
 }
 
 export async function PATCH(request: Request) {
@@ -177,19 +183,23 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: '请求参数错误' }, { status: 400 });
   }
 
-  const user = await prisma.user.update({
-    where: { id: parsed.data.id },
-    data: { status: parsed.data.status },
-    select: {
-      id: true,
-      username: true,
-      role: true,
-      status: true,
-      createdAt: true,
-    },
-  });
+  try {
+    const user = await prisma.user.update({
+      where: { id: parsed.data.id },
+      data: { status: parsed.data.status },
+      select: {
+        id: true,
+        username: true,
+        role: true,
+        status: true,
+        createdAt: true,
+      },
+    });
 
-  return NextResponse.json(user);
+    return NextResponse.json(user);
+  } catch (error) {
+    return prismaErrorResponse(error);
+  }
 }
 
 export async function DELETE(request: Request) {
