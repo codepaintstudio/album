@@ -142,6 +142,18 @@ export async function persistVideo(file: File, mimeType: string) {
   };
 }
 
+/**
+ * 只做配置解析、不碰任何对象。供批量删除在发起 N 次请求之前预检：
+ * 环境没配好时应当一次报出，而不是让 4000 次删除各抛一遍同样的错误。
+ *
+ * 注意 getConfig() 即使只为删除也会检查公网 base URL（见其内部）。不修：
+ * StorageConfig.publicBaseUrl 是 string，做成可空要波及 6 个 route 的 URL 构造，
+ * 而没有哪条缺陷要求这个收益。调用方用 misconfigured 标记 + 可操作文案兜住即可。
+ */
+export function ensureStorageConfigured(): void {
+  getConfig();
+}
+
 export async function deleteImageAssets(filename: string) {
   const config = getConfig();
   const client = getClient();

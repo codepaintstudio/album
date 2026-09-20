@@ -1,5 +1,11 @@
 import { getViewer } from '@/lib/access';
 import { type Visibility, categoryWhereFor } from '@/lib/access-rules';
+import {
+  cleanupErrorResponse,
+  deleteAssetsThenRows,
+  listPhotoUnitsOfCategory,
+  reportSkippedNames,
+} from '@/lib/asset-cleanup';
 import { requireAdmin } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import { prismaErrorResponse } from '@/lib/prisma-errors';
@@ -112,8 +118,29 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: parseResult.error.flatten().fieldErrors }, { status: 400 });
   }
 
-  await prisma.category.delete({
-    where: { id: parseResult.data.id },
+  const { id } = parseResult.data;
+
+  const category = await prisma.category.findUnique({
+    where: { id },
+    select: { id: true },
   });
-  return NextResponse.json({ success: true });
+  if (!category) {
+    return NextResponse.json({ error: '分类不存在' }, { status: 404 });
+  }
+
+  // 必须在删分类之前取走子照片的对象键：Photo.category 的 onDelete: Cascade 会让这些行
+  // 在库内消失，而它们是那些对象存在过的唯一记录。缺这一步就是缺陷 B 本身。
+  const plan = await listPhotoUnitsOfCategory(id);
+  reportSkippedNames('DELETE /api/categories', plan.skipped);
+
+  try {
+    const outcome = await deleteAssetsThenRows(plan.units, () =>
+      prisma.category.delete({ where: { id } })
+    );
+    if (!outcome.ok) return cleanupErrorResponse(outcome);
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    return prismaErrorResponse(error);
+  }
 }

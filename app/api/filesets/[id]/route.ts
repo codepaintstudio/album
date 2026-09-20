@@ -1,7 +1,13 @@
 import { canTouchFileSet } from '@/lib/access-rules';
+import {
+  cleanupErrorResponse,
+  deleteAssetsThenRows,
+  listFileUnitsOfFileSet,
+  reportSkippedNames,
+} from '@/lib/asset-cleanup';
 import { requireAdmin, requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
-import { deleteFileAsset } from '@/lib/storage';
+import { prismaErrorResponse } from '@/lib/prisma-errors';
 import { visibilitySchema } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -111,35 +117,32 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
  * DELETE /api/filesets/:id - Delete fileset with all its files (admin only)
  */
 export async function DELETE(_: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id: idStr } = await params;
+  const id = Number(idStr);
+  if (!Number.isInteger(id) || id <= 0) {
+    return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
+  }
+
+  const adminCheck = await requireAdmin();
+  if (!adminCheck.ok) return adminCheck.error;
+
+  const fileset = await prisma.fileSet.findUnique({ where: { id }, select: { id: true } });
+  if (!fileset) {
+    return NextResponse.json({ message: '文件集不存在' }, { status: 404 });
+  }
+
+  // 先取子文件名：File.fileSet 是级联删除，父行没了这些行也就没了。
+  const plan = await listFileUnitsOfFileSet(id);
+  reportSkippedNames('DELETE /api/filesets/:id', plan.skipped);
+
   try {
-    const { id: idStr } = await params;
-    const id = Number(idStr);
-    if (Number.isNaN(id)) return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
-
-    const adminCheck = await requireAdmin();
-    if (!adminCheck.ok) return adminCheck.error;
-
-    // Get all files in this fileset to delete from storage
-    const files = (await prisma.file.findMany({
-      where: { filesetId: id },
-      select: { filename: true },
-    })) as Array<{ filename: string }>;
-
-    // Delete from storage (best effort)
-    await Promise.allSettled(files.map(f => deleteFileAsset(f.filename)));
-
-    // Delete fileset (cascade will delete all file records)
-    await prisma.fileSet.delete({ where: { id } });
+    const outcome = await deleteAssetsThenRows(plan.units, () =>
+      prisma.fileSet.delete({ where: { id } })
+    );
+    if (!outcome.ok) return cleanupErrorResponse(outcome, 'message');
 
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    console.error('[DELETE /api/filesets/:id]', e);
-    if (e?.message === 'Unauthorized') {
-      return NextResponse.json({ message: '未登录' }, { status: 401 });
-    }
-    if (e?.message === 'Forbidden') {
-      return NextResponse.json({ message: '仅管理员可删除文件集' }, { status: 403 });
-    }
-    return NextResponse.json({ message: '删除失败' }, { status: 500 });
+  } catch (error) {
+    return prismaErrorResponse(error, 'message');
   }
 }

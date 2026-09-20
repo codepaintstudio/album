@@ -1,11 +1,15 @@
 import { getViewer } from '@/lib/access';
 import { categoryWhereFor } from '@/lib/access-rules';
+import {
+  cleanupErrorResponse,
+  deleteAssetsThenRows,
+  reportSkippedNames,
+} from '@/lib/asset-cleanup';
+import { planPhotoUnits } from '@/lib/asset-deletion';
 import { requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import {
   ConfigurationError,
-  deleteImageAssets,
-  deleteUploadObject,
   getOriginalBuffer,
   getPublicObjectUrl,
   getPublicThumbnailUrl,
@@ -210,25 +214,19 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: '仅可操作自己上传的照片' }, { status: 403 });
   }
 
-  await prisma.photo.deleteMany({ where: { id: { in: targetPhotos.map(photo => photo.id) } } });
+  const plan = planPhotoUnits(targetPhotos);
+  reportSkippedNames('DELETE /api/photos', plan.skipped);
 
-  try {
-    await Promise.all(
-      targetPhotos.map(photo =>
-        photo.mediaType === 'image'
-          ? deleteImageAssets(photo.filename)
-          : deleteUploadObject(photo.filename)
-      )
-    );
-  } catch (error) {
-    if (error instanceof ConfigurationError) {
-      console.error(error);
-      return NextResponse.json({ error: '对象存储配置错误' }, { status: 500 });
-    }
-    throw error;
-  }
+  // 对象先、行后：反过来时行一旦没了，filename 就再也找不到，泄漏不可追溯。
+  // 泛型显式写出：本环境的 Prisma 客户端是手写声明，不写就会退化成 unknown，
+  // 而这个 .count 恰恰是"到底删了几行"的真话来源。
+  const outcome = await deleteAssetsThenRows<{ count: number }>(plan.units, () =>
+    prisma.photo.deleteMany({ where: { id: { in: targetPhotos.map(photo => photo.id) } } })
+  );
 
-  return NextResponse.json({ deleted: targetPhotos.length });
+  if (!outcome.ok) return cleanupErrorResponse(outcome);
+
+  return NextResponse.json({ deleted: outcome.result.count });
 }
 
 export async function PATCH(request: Request) {
