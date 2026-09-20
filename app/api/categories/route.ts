@@ -64,7 +64,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parseResult = categoryCreateSchema.safeParse(body);
@@ -84,7 +84,7 @@ export async function POST(request: Request) {
 
 export async function PUT(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parseResult = categoryUpdateSchema.safeParse(body);
@@ -110,7 +110,7 @@ export async function PUT(request: Request) {
 
 export async function DELETE(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parseResult = categoryDeleteSchema.safeParse(body);

@@ -46,7 +46,7 @@ const deleteUserSchema = z.object({
 
 export async function GET(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const { searchParams } = new URL(request.url);
   const pageParam = searchParams.get('page') ?? '1';
@@ -119,7 +119,7 @@ export async function POST(request: Request) {
     status = 'active';
   } else if (parsed.data.role && parsed.data.role !== 'member') {
     const adminCheck = await requireAdmin();
-    if ('error' in adminCheck) {
+    if (!adminCheck.ok) {
       return adminCheck.error;
     }
     status = 'active';
@@ -153,7 +153,7 @@ export async function POST(request: Request) {
 
 export async function PUT(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parsed = updateRoleSchema.safeParse(body);
@@ -181,7 +181,7 @@ export async function PUT(request: Request) {
 
 export async function PATCH(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parsed = updateStatusSchema.safeParse(body);
@@ -210,7 +210,7 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parsed = deleteUserSchema.safeParse(body);

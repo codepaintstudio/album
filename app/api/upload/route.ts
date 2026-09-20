@@ -20,9 +20,7 @@ const uploadSchema = z.object({
 
 export async function POST(request: Request) {
   const authCheck = await requireAuth();
-  if ('error' in authCheck) {
-    return authCheck.error;
-  }
+  if (!authCheck.ok) return authCheck.error;
 
   const formData = await request.formData();
   const file = formData.get('file');

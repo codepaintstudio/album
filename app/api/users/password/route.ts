@@ -12,7 +12,7 @@ const resetPasswordSchema = z.object({
 
 export async function POST(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parsed = resetPasswordSchema.safeParse(body);
