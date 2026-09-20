@@ -1,10 +1,14 @@
+import {
+  ALLOWED_IMAGE_MIME,
+  ALLOWED_VIDEO_MIME,
+  extensionForUpload,
+  mimeFromFilename,
+} from '@/lib/media-type';
 import { TosClient, TosServerCode, TosServerError } from '@volcengine/tos-sdk';
 import { randomUUID } from 'crypto';
 import 'server-only';
 import sharp from 'sharp';
 
-const ALLOWED_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
-const ALLOWED_VIDEO_MIME = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const MAX_VIDEO_FILE_SIZE = 512 * 1024 * 1024; // 512MB for videos
 const MAX_GENERAL_FILE_SIZE = 512 * 1024 * 1024; // 512MB for general files
@@ -37,11 +41,16 @@ export class UploadError extends Error {
   }
 }
 
-export async function persistImage(file: File) {
+/**
+ * mimeType 由调用方（resolveUploadMedia）决定，而不是这里再看一次 file.type：
+ * 空 type 的上传在旧实现里会掉进 persistVideo 的视频白名单，被以
+ * 「仅支持 MP4 / WebM / MOV 视频」拒绝。真正的字节仍由下面的 sharp 验证。
+ */
+export async function persistImage(file: File, mimeType: string) {
   const config = getConfig();
   const client = getClient();
 
-  if (!ALLOWED_IMAGE_MIME.has(file.type)) {
+  if (!ALLOWED_IMAGE_MIME.has(mimeType)) {
     throw new UploadError('仅支持 JPG/PNG/GIF/WebP 图片');
   }
 
@@ -53,21 +62,32 @@ export async function persistImage(file: File) {
   const buffer = Buffer.from(arrayBuffer);
 
   const originalName = file.name;
-  const extension = getExtensionFromFile(file);
+  const extension = extensionForUpload(file.name, mimeType);
   const filename = `${Date.now()}-${randomUUID()}${extension}`;
   const objectKey = buildObjectKey(filename, config);
+
+  // 缩略图解码必须在原图上传之前：反过来时一张坏图片已经把一个永远没有数据库行
+  // 引用它的原图写进了桶里，而这条孤儿没有任何代码能再找到它。
+  let thumbnailBuffer: Buffer;
+  try {
+    const { data } = await sharp(buffer, { sequentialRead: true })
+      .resize(400, 400, { fit: 'inside', withoutEnlargement: true, fastShrinkOnLoad: true })
+      .webp({ quality: 80 })
+      .toBuffer({ resolveWithObject: true });
+    thumbnailBuffer = data;
+  } catch (error) {
+    // 走到这里说明声明/扩展名说它是图片，但字节不是 ⇒ 客户端得到诚实的 400，
+    // 真实原因留在日志里，不把 sharp 的内部信息透给前端。
+    console.error('[persistImage] 图片解码失败', file.name, error);
+    throw new UploadError('图片内容无法解析，请确认文件确实是图片');
+  }
 
   const originalUpload = client.putObject({
     bucket: config.bucket,
     key: objectKey,
     body: buffer,
-    contentType: file.type,
+    contentType: mimeType,
   });
-
-  const { data: thumbnailBuffer } = await sharp(buffer, { sequentialRead: true })
-    .resize(400, 400, { fit: 'inside', withoutEnlargement: true, fastShrinkOnLoad: true })
-    .webp({ quality: 80 })
-    .toBuffer({ resolveWithObject: true });
 
   const thumbnailKey = buildThumbnailKey(filename, config);
 
@@ -87,11 +107,11 @@ export async function persistImage(file: File) {
   };
 }
 
-export async function persistVideo(file: File) {
+export async function persistVideo(file: File, mimeType: string) {
   const config = getConfig();
   const client = getClient();
 
-  if (!ALLOWED_VIDEO_MIME.has(file.type)) {
+  if (!ALLOWED_VIDEO_MIME.has(mimeType)) {
     throw new UploadError('仅支持 MP4 / WebM / MOV 视频');
   }
 
@@ -103,7 +123,9 @@ export async function persistVideo(file: File) {
   const buffer = Buffer.from(arrayBuffer);
 
   const originalName = file.name;
-  const extension = getExtensionFromFile(file) || getExtensionFromMime(file.type);
+  // 旧写法 getExtensionFromFile(file) || getExtensionFromMime(file.type) 在空 type 时
+  // 两头都拿不到东西，于是键名没有扩展名，任何按扩展名反推类型的读取都会失败。
+  const extension = extensionForUpload(file.name, mimeType);
   const filename = `${Date.now()}-${randomUUID()}${extension}`;
   const objectKey = buildObjectKey(filename, config);
 
@@ -111,7 +133,7 @@ export async function persistVideo(file: File) {
     bucket: config.bucket,
     key: objectKey,
     body: buffer,
-    contentType: file.type || 'video/mp4',
+    contentType: mimeType,
   });
 
   return {
@@ -281,7 +303,7 @@ export async function persistFile(file: File) {
   const buffer = Buffer.from(arrayBuffer);
 
   const originalName = file.name;
-  const extension = getExtensionFromFileName(file.name);
+  const extension = extensionForUpload(file.name, file.type || 'application/octet-stream');
   const filename = `${Date.now()}-${randomUUID()}${extension}`;
   const objectKey = buildFileObjectKey(filename, config);
 
@@ -328,17 +350,6 @@ export function getPublicFileUrl(filename: string) {
  */
 function buildFileObjectKey(filename: string, config: StorageConfig) {
   return `${config.filesPrefix}${filename}`;
-}
-
-/**
- * Get file extension from filename
- */
-function getExtensionFromFileName(filename: string) {
-  const match = /\.([^.]+)$/u.exec(filename);
-  if (match?.[1]) {
-    return `.${match[1].toLowerCase()}`;
-  }
-  return '';
 }
 
 // ========= 直传/直下签名 =========
@@ -441,17 +452,10 @@ export async function getFileBuffer(filename: string) {
 
 /**
  * Best-effort MIME guess from filename extension for preview responses.
+ * 表在 lib/media-type.ts，这里只补它的兜底值。
  */
 export function guessMimeFromFilename(name: string) {
-  const lower = name.toLowerCase();
-  if (lower.endsWith('.pdf')) return 'application/pdf';
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-  if (lower.endsWith('.gif')) return 'image/gif';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.txt')) return 'text/plain';
-  if (lower.endsWith('.md')) return 'text/markdown';
-  return 'application/octet-stream';
+  return mimeFromFilename(name) ?? 'application/octet-stream';
 }
 
 function sanitizePrefix(input: string) {
@@ -470,37 +474,6 @@ function joinUrl(base: string, path: string) {
   if (!base) return path;
   const normalizedPath = path.replace(/^\/+/, '');
   return `${base}/${normalizedPath}`;
-}
-
-function getExtensionFromFile(file: File) {
-  if (file.name) {
-    const match = /\.([^.]+)$/u.exec(file.name);
-    if (match?.[1]) {
-      return `.${match[1].toLowerCase()}`;
-    }
-  }
-  return getExtensionFromMime(file.type);
-}
-
-function getExtensionFromMime(mime: string) {
-  switch (mime) {
-    case 'image/jpeg':
-      return '.jpg';
-    case 'image/png':
-      return '.png';
-    case 'image/gif':
-      return '.gif';
-    case 'image/webp':
-      return '.webp';
-    case 'video/mp4':
-      return '.mp4';
-    case 'video/webm':
-      return '.webm';
-    case 'video/quicktime':
-      return '.mov';
-    default:
-      return '';
-  }
 }
 
 export function isNotFoundError(error: unknown) {

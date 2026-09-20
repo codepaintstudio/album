@@ -1,6 +1,7 @@
 import { canUploadToCategory } from '@/lib/access-rules';
 import { requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
+import { AmbiguousMediaError, resolveUploadMedia } from '@/lib/media-type';
 import {
   ConfigurationError,
   UploadError,
@@ -55,11 +56,15 @@ export async function POST(request: Request) {
   const uploaderId = viewer.id;
 
   try {
-    const isImage = file.type.startsWith('image/');
-    const mimeType = file.type || (isImage ? 'image/jpeg' : 'video/mp4');
-    const { filename, originalName } = isImage
-      ? await persistImage(file)
-      : await persistVideo(file);
+    // mediaType 与 mimeType 由同一个函数同源产出。旧写法分两处推导：
+    // `file.type.startsWith('image/')` 决定 mediaType，`file.type || (isImage ? … : 'video/mp4')`
+    // 决定 mimeType。空 type 时 isImage 为 false，于是真图片会掉进 persistVideo 的
+    // 视频白名单，被以「仅支持 MP4 / WebM / MOV 视频」这个误导性的 400 拒掉。
+    const media = resolveUploadMedia({ name: file.name, declaredType: file.type });
+    const { filename, originalName } =
+      media.kind === 'image'
+        ? await persistImage(file, media.mimeType)
+        : await persistVideo(file, media.mimeType);
 
     const photo = await prisma.photo.create({
       data: {
@@ -68,8 +73,8 @@ export async function POST(request: Request) {
         description: parsed.data.description,
         categoryId: parsed.data.categoryId,
         uploaderId,
-        mediaType: isImage ? 'image' : 'video',
-        mimeType,
+        mediaType: media.kind,
+        mimeType: media.mimeType,
       },
       include: {
         uploader: { select: { username: true } },
@@ -90,6 +95,12 @@ export async function POST(request: Request) {
       thumbnailUrl: photo.mediaType === 'image' ? getPublicThumbnailUrl(photo.filename) : null,
     });
   } catch (error) {
+    if (error instanceof AmbiguousMediaError) {
+      return NextResponse.json(
+        { error: error.message, code: 'ambiguous_media_type' },
+        { status: 400 }
+      );
+    }
     if (error instanceof UploadError) {
       return NextResponse.json({ error: error.message }, { status: error.statusCode });
     }
