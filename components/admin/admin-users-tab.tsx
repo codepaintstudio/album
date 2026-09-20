@@ -1,6 +1,8 @@
 'use client';
 
 import type { UserItem } from '@/components/admin/types';
+import type { UserDeletePayload } from '@/components/admin/user-delete-dialog';
+import { UserDeleteDialog } from '@/components/admin/user-delete-dialog';
 import { PaginationControls } from '@/components/pagination-controls';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -15,7 +17,6 @@ import {
 import { ErrorAlert } from '@/components/ui/error-alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import {
   Select,
   SelectContent,
@@ -66,8 +67,7 @@ export function AdminUsersTab({
   const [selectedUserRole, setSelectedUserRole] = useState<Record<number, string>>({});
 
   const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
-  const [deleteTransferUserId, setDeleteTransferUserId] = useState<number | null>(null);
-  const [deletePhotosDirectly, setDeletePhotosDirectly] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [resettingPasswordUserId, setResettingPasswordUserId] = useState<number | null>(null);
   const [newPassword, setNewPassword] = useState('');
@@ -161,43 +161,32 @@ export function AdminUsersTab({
 
   const resetDeleteDialog = () => {
     setDeletingUserId(null);
-    setDeleteTransferUserId(null);
-    setDeletePhotosDirectly(false);
+    setDeleting(false);
   };
 
-  const handleUserDelete = async () => {
-    if (!deletingUserId || !deletingUser) return;
+  const handleUserDelete = async (payload: UserDeletePayload) => {
     setError(null);
+    setDeleting(true);
 
-    if (deletingUser.photoCount > 0 && !deletePhotosDirectly && !deleteTransferUserId) {
-      setError('该用户有照片，请选择转移到其他用户或直接删除照片');
-      return;
+    try {
+      const response = await fetch('/api/users', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        // 服务端的 planUserDelete 会把所有违规一次返回，error 已是拼接好的一句。
+        setError(body.error ?? '删除用户失败');
+        return;
+      }
+
+      resetDeleteDialog();
+      startTransition(() => router.refresh());
+    } finally {
+      setDeleting(false);
     }
-
-    const payload: { id: number; transferToUserId?: number; deletePhotos?: boolean } = {
-      id: deletingUserId,
-    };
-
-    if (deletePhotosDirectly) {
-      payload.deletePhotos = true;
-    } else if (deleteTransferUserId) {
-      payload.transferToUserId = deleteTransferUserId;
-    }
-
-    const response = await fetch('/api/users', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      setError(body.error ?? '删除用户失败');
-      return;
-    }
-
-    resetDeleteDialog();
-    startTransition(() => router.refresh());
   };
 
   return (
@@ -367,70 +356,13 @@ export function AdminUsersTab({
         <PaginationControls page={page} total={total} pageSize={pageSize} />
       </div>
 
-      <Dialog open={deletingUserId !== null} onOpenChange={open => !open && resetDeleteDialog()}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>删除用户</DialogTitle>
-            <DialogDescription>
-              {deletingUser?.photoCount
-                ? `该用户有 ${deletingUser.photoCount} 张照片，请选择如何处理这些照片：`
-                : '确认删除该用户？'}
-            </DialogDescription>
-          </DialogHeader>
-          {deletingUser?.photoCount ? (
-            <RadioGroup
-              value={deletePhotosDirectly ? 'delete' : deleteTransferUserId ? 'transfer' : ''}
-              onValueChange={value => {
-                if (value === 'delete') {
-                  setDeletePhotosDirectly(true);
-                  setDeleteTransferUserId(null);
-                } else {
-                  setDeletePhotosDirectly(false);
-                }
-              }}
-            >
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="delete" id="delete-photos" />
-                <Label htmlFor="delete-photos">直接删除所有照片</Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="transfer" id="transfer-photos" />
-                <Label htmlFor="transfer-photos">转移到其他用户</Label>
-              </div>
-            </RadioGroup>
-          ) : null}
-          {deletingUser?.photoCount && !deletePhotosDirectly ? (
-            <div className="space-y-2">
-              <Label htmlFor="transfer-user">选择目标用户</Label>
-              <Select
-                value={deleteTransferUserId?.toString() ?? ''}
-                onValueChange={value => setDeleteTransferUserId(Number(value))}
-              >
-                <SelectTrigger id="transfer-user">
-                  <SelectValue placeholder="选择用户" />
-                </SelectTrigger>
-                <SelectContent>
-                  {users
-                    .filter(u => u.id !== deletingUserId)
-                    .map(user => (
-                      <SelectItem key={user.id} value={String(user.id)}>
-                        {user.username}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : null}
-          <DialogFooter>
-            <Button variant="ghost" onClick={resetDeleteDialog}>
-              取消
-            </Button>
-            <Button variant="destructive" onClick={handleUserDelete}>
-              确认删除
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <UserDeleteDialog
+        user={deletingUser}
+        candidates={users}
+        busy={deleting}
+        onClose={resetDeleteDialog}
+        onConfirm={handleUserDelete}
+      />
 
       <Dialog
         open={resettingPasswordUserId !== null}

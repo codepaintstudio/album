@@ -43,6 +43,10 @@ model Photo {
   mediaType    MediaType @default(image)
   mimeType     String
   category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  // 归属关系刻意不加 onDelete：Cascade 会让子行在库内消失，应用代码从此读不到
+  // filename，那些对象就成了永久且不可追溯的泄漏（缺陷 B 的成因正是已经存在的
+  // Cascade）。默认 Restrict 反而是安全的：它逼着删除方先处置子行。
+  // 这条不变量由 __tests__/schema-invariants.test.ts 钉住。
   uploader     User     @relation(fields: [uploaderId], references: [id])
   createdAt    DateTime @default(now())
 
@@ -96,7 +100,7 @@ model FileSet {
   description String?
   visibility  FileSetVisibility @default(internal)
   createdBy   Int
-  creator     User              @relation("UserFileSetCreator", fields: [createdBy], references: [id])
+  creator     User              @relation("UserFileSetCreator", fields: [createdBy], references: [id]) // 归属关系，理由同 Photo.uploader：不加 onDelete
   files       File[]
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
@@ -114,7 +118,7 @@ model File {
   filesetId    Int
   uploaderId   Int
   fileSet      FileSet  @relation(fields: [filesetId], references: [id], onDelete: Cascade)
-  uploader     User     @relation("UserFileCreator", fields: [uploaderId], references: [id])
+  uploader     User     @relation("UserFileCreator", fields: [uploaderId], references: [id]) // 归属关系，理由同 Photo.uploader：不加 onDelete
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

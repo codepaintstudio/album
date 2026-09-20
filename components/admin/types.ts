@@ -22,6 +22,8 @@ export interface UserItem {
   role: string;
   status: 'pending' | 'active' | 'rejected';
   photoCount: number;
+  fileCount: number;
+  fileSetCount: number;
   createdAt: string;
 }
 

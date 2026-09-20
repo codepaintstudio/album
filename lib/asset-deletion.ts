@@ -206,3 +206,128 @@ export async function deleteAssetsThenRowsWith<T>(
 
   return { ok: true, result: await deleteRows(), objectTotal };
 }
+
+// ========= 删除用户：资产处置决策 =========
+
+/**
+ * User 上每一个会阻止删除的关系（Prisma 对必填关系默认 Restrict，所以删除会撞 P2003）。
+ *
+ * 这些字段名必须与 prisma/schema.prisma 里 model User 的反向关系逐字一致。本环境的
+ * Prisma 委托参数是 any，写错一个字母 tsc 与 CI 都不会报，而它会把"这个用户到底有
+ * 什么"数成一个错误的 0，于是放行一次必然撞外键的删除。
+ * __tests__/schema-invariants.test.ts 把这条钉住。
+ *
+ * 下面这个 select 对象是这三处 _count 查询（删除接口、管理页 RSC）唯一的书写处：
+ * 名单本身只长在这里，调用点抄不出第四个名字，也漏不掉一个。
+ */
+export const USER_ASSET_COUNT_SELECT = {
+  photos: true,
+  filesUploaded: true,
+  fileSetsCreated: true,
+} as const;
+
+export const USER_RESTRICTING_RELATIONS = Object.keys(
+  USER_ASSET_COUNT_SELECT
+) as (keyof typeof USER_ASSET_COUNT_SELECT)[];
+
+/** 上面那份 select 的返回形状：两个消费点都从这里取，名字不再各自硬写一遍。 */
+export type UserAssetCounts = { [K in keyof typeof USER_ASSET_COUNT_SELECT]: number };
+
+/**
+ * 'delete' 目前是**写出来就会被拒**的取值：本系统的处置方式是转移，用户删除不销毁任何
+ * 资产。留着这个标签是有意的——将来放开"连资产一并销毁"时，需要的是在这里加一条规则，
+ * 而不是再设计一遍决策表，且销毁路径可以直接复用 deleteAssetsThenRowsWith。
+ */
+export type AssetDisposition = 'transfer' | 'delete';
+
+export type UserDeleteInput = {
+  photoCount: number;
+  fileCount: number;
+  fileSetCount: number;
+  photoDecision?: AssetDisposition;
+  driveDecision?: AssetDisposition;
+  transferToUserId?: number;
+  /** 正要被删除的那个用户。 */
+  targetUserId: number;
+  isSelf: boolean;
+  isTargetAdmin: boolean;
+  adminCount: number;
+  transferTargetExists: boolean;
+  transferTargetActive: boolean;
+};
+
+export type UserDeletePlan =
+  | { ok: false; errors: string[] }
+  | {
+      ok: true;
+      photos: AssetDisposition | 'none';
+      drive: AssetDisposition | 'none';
+      transferToUserId?: number;
+    };
+
+/**
+ * 删除用户前把每一条违规**一次全部**报出来。
+ *
+ * 旧实现是逐条揭示：先只问照片（app/api/users/route.ts 的 deletePhotos 分支），
+ * 照片处置完才在 prisma.user.delete 上撞它从没问过的云盘外键，返回一个裸 500——
+ * 此时照片行已被销毁而它们的对象永远留在桶里。把决策做成前置的纯函数表之后，
+ * 那条路径不存在了：任何写发生之前，所有会被 Restrict 的关系都已处置干净。
+ */
+export function planUserDelete(input: UserDeleteInput): UserDeletePlan {
+  const errors: string[] = [];
+  const hasPhotos = input.photoCount > 0;
+  const hasDrive = input.fileCount > 0 || input.fileSetCount > 0;
+
+  if (input.isSelf) {
+    errors.push('不能删除自己的账户');
+  }
+  if (input.isTargetAdmin && input.adminCount <= 1) {
+    errors.push('这是系统中唯一的管理员，删除后将无人可管理后台');
+  }
+
+  const domains: Array<[string, AssetDisposition | undefined, boolean]> = [
+    ['照片', input.photoDecision, hasPhotos],
+    ['云盘', input.driveDecision, hasDrive],
+  ];
+
+  for (const [label, decision, hasRows] of domains) {
+    // 该域没有行就不需要决定：没有资产的用户应能被直接删除，今天恰恰是这个分支
+    // 被 `userToDelete._count.photos > 0` 之外的条件挡住了。
+    if (!hasRows) continue;
+    if (!decision) {
+      errors.push(`该用户有${label}资产，请选择如何处置`);
+      continue;
+    }
+    if (decision !== 'transfer') {
+      errors.push(`${label}目前只能转移给其他用户，不支持随删除一并销毁`);
+    }
+  }
+
+  const needsTransfer = hasPhotos || hasDrive;
+
+  if (needsTransfer) {
+    if (input.transferToUserId === undefined) {
+      errors.push('缺少资产转移的目标用户');
+    } else {
+      if (input.transferToUserId === input.targetUserId) {
+        errors.push('不能把资产转移给正在被删除的用户');
+      }
+      if (!input.transferTargetExists) {
+        errors.push('目标用户不存在');
+      } else if (!input.transferTargetActive) {
+        errors.push('目标账户尚未激活，不能接收资产');
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+
+  return {
+    ok: true,
+    photos: hasPhotos ? 'transfer' : 'none',
+    drive: hasDrive ? 'transfer' : 'none',
+    transferToUserId: needsTransfer ? input.transferToUserId : undefined,
+  };
+}

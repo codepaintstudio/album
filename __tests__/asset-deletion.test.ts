@@ -2,10 +2,12 @@ import {
   type AssetDeleter,
   type CleanupUnit,
   type PhotoLike,
+  type UserDeleteInput,
   deleteAssetsThenRowsWith,
   objectCount,
   planFileUnits,
   planPhotoUnits,
+  planUserDelete,
   unitForFile,
   unitForPhoto,
 } from '@/lib/asset-deletion';
@@ -340,5 +342,164 @@ describe('deleteAssetsThenRowsWith：空计划与违约执行器', () => {
         throw new Error('P2003');
       })
     ).rejects.toThrow('P2003');
+  });
+});
+
+// ========= 删除用户的决策表 =========
+
+const NO_ASSETS = { photoCount: 0, fileCount: 0, fileSetCount: 0 };
+const base: UserDeleteInput = {
+  ...NO_ASSETS,
+  targetUserId: 5,
+  isSelf: false,
+  isTargetAdmin: false,
+  adminCount: 2,
+  transferToUserId: 9,
+  transferTargetExists: true,
+  transferTargetActive: true,
+  photoDecision: 'transfer',
+  driveDecision: 'transfer',
+};
+
+function planFor(overrides: Partial<UserDeleteInput>) {
+  return planUserDelete({ ...base, ...overrides });
+}
+
+describe('planUserDelete 决策矩阵', () => {
+  it('零资产用户不需要任何决定，可以直接删除', () => {
+    expect(
+      planFor({
+        ...NO_ASSETS,
+        photoDecision: undefined,
+        driveDecision: undefined,
+        transferToUserId: undefined,
+      })
+    ).toEqual({ ok: true, photos: 'none', drive: 'none', transferToUserId: undefined });
+  });
+
+  it('该域没有行时多给的决定被忽略而不是报错', () => {
+    expect(planFor({ ...NO_ASSETS })).toEqual({
+      ok: true,
+      photos: 'none',
+      drive: 'none',
+      transferToUserId: undefined,
+    });
+  });
+
+  it('有照片却没给决定 ⇒ 拒绝', () => {
+    const plan = planFor({ photoCount: 3, photoDecision: undefined, driveDecision: undefined });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.errors.join('')).toContain('照片');
+  });
+
+  it('有云盘文件却没被问到 ⇒ 这正是缺陷 D：旧实现只看 _count.photos，云盘从不进问题', () => {
+    const plan = planFor({
+      photoCount: 0,
+      fileCount: 4,
+      photoDecision: undefined,
+      driveDecision: undefined,
+    });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.errors.join('')).toContain('云盘');
+  });
+
+  it('只有文件集、没有散装文件时同样需要云盘决定', () => {
+    const plan = planFor({ fileSetCount: 2, driveDecision: undefined, photoDecision: undefined });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.errors.join('')).toContain('云盘');
+  });
+
+  it('两个域各自缺决定时两条都报，而不是修完一条再撞下一条', () => {
+    const plan = planFor({
+      photoCount: 1,
+      fileCount: 1,
+      photoDecision: undefined,
+      driveDecision: undefined,
+    });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.errors).toHaveLength(2);
+  });
+
+  it("'delete' 目前一律拒绝：用户删除只转移资产，不销毁对象", () => {
+    for (const overrides of [
+      { photoCount: 1, photoDecision: 'delete' as const },
+      { fileCount: 1, driveDecision: 'delete' as const },
+    ]) {
+      const plan = planFor(overrides);
+      expect(plan.ok).toBe(false);
+      if (!plan.ok) expect(plan.errors.join('')).toContain('只能转移');
+    }
+  });
+
+  it('相册与云盘都转移成功时给出两个域的计划', () => {
+    expect(planFor({ photoCount: 2, fileCount: 3, fileSetCount: 1 })).toEqual({
+      ok: true,
+      photos: 'transfer',
+      drive: 'transfer',
+      transferToUserId: 9,
+    });
+  });
+});
+
+describe('planUserDelete：转移目标必须是能收的人', () => {
+  it('缺少目标用户 ⇒ 拒绝', () => {
+    const plan = planFor({ photoCount: 1, transferToUserId: undefined });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.errors.join('')).toContain('目标用户');
+  });
+
+  it('目标不能是被删的那个用户自己', () => {
+    const plan = planFor({ photoCount: 1, transferToUserId: 5 });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.errors.join('')).toContain('正在被删除');
+  });
+
+  it('目标不存在 ⇒ 拒绝（旧实现返回 404 之后就不再检查别的条件了）', () => {
+    const plan = planFor({ photoCount: 1, transferTargetExists: false });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.errors.join('')).toContain('目标用户不存在');
+  });
+
+  it('目标尚未激活 ⇒ 不能把资产挂到 pending 账户上', () => {
+    const plan = planFor({ photoCount: 1, transferTargetActive: false });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.errors.join('')).toContain('尚未激活');
+  });
+
+  it('rejected 的接收方同样被拒：active 是唯一可收状态', () => {
+    expect(planFor({ photoCount: 1, transferTargetActive: false }).ok).toBe(false);
+  });
+});
+
+describe('planUserDelete：不让管理员把自己或把系统锁死', () => {
+  it('不能删除自己（此前无任何检查）', () => {
+    const plan = planFor({ isSelf: true, photoDecision: undefined, driveDecision: undefined });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.errors.join('')).toContain('自己');
+  });
+
+  it('不能删除唯一的管理员', () => {
+    const plan = planFor({ isTargetAdmin: true, adminCount: 1 });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.errors.join('')).toContain('唯一的管理员');
+  });
+
+  it('还有第二个管理员时允许', () => {
+    expect(planFor({ isTargetAdmin: true, adminCount: 2, ...NO_ASSETS }).ok).toBe(true);
+  });
+
+  it('多条违规一次全部返回：三个问题就报三条', () => {
+    const plan = planFor({
+      photoCount: 4,
+      fileCount: 2,
+      isSelf: true,
+      isTargetAdmin: true,
+      adminCount: 1,
+      photoDecision: undefined,
+      driveDecision: undefined,
+      transferToUserId: undefined,
+    });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.errors).toHaveLength(5);
   });
 });

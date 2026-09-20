@@ -1,7 +1,12 @@
+import {
+  USER_ASSET_COUNT_SELECT,
+  type UserAssetCounts,
+  planUserDelete,
+} from '@/lib/asset-deletion';
 import { requireAdmin } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import { prismaErrorResponse } from '@/lib/prisma-errors';
-import { idSchema } from '@/lib/validation';
+import { idSchema, optionalIdSchema } from '@/lib/validation';
 import type { Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { NextResponse } from 'next/server';
@@ -33,9 +38,10 @@ const updateStatusSchema = z.object({
 });
 
 const deleteUserSchema = z.object({
-  id: z.number().int(),
-  transferToUserId: z.number().int().optional(),
-  deletePhotos: z.boolean().optional(),
+  id: idSchema,
+  photoDecision: z.enum(['transfer', 'delete']).optional(),
+  driveDecision: z.enum(['transfer', 'delete']).optional(),
+  transferToUserId: optionalIdSchema,
 });
 
 export async function GET(request: Request) {
@@ -212,51 +218,81 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: '请求参数错误' }, { status: 400 });
   }
 
-  const { id, transferToUserId, deletePhotos } = parsed.data;
+  const { id, photoDecision, driveDecision, transferToUserId } = parsed.data;
 
-  // 检查要删除的用户是否存在
-  const userToDelete = await prisma.user.findUnique({
+  const userToDelete = (await prisma.user.findUnique({
     where: { id },
-    include: { _count: { select: { photos: true } } },
-  });
+    select: {
+      id: true,
+      role: true,
+      _count: { select: { ...USER_ASSET_COUNT_SELECT } },
+    },
+  })) as { id: number; role: string; _count: UserAssetCounts } | null;
 
   if (!userToDelete) {
     return NextResponse.json({ error: '用户不存在' }, { status: 404 });
   }
 
-  // 如果有照片需要处理
-  if (userToDelete._count.photos > 0) {
-    if (deletePhotos) {
-      // 删除该用户的所有照片
-      await prisma.photo.deleteMany({
-        where: { uploaderId: id },
-      });
-    } else if (transferToUserId) {
-      // 转移到指定用户
-      const targetUser = await prisma.user.findUnique({
+  const adminCount = (await prisma.user.count({ where: { role: 'admin' } })) as number;
+
+  const receiver = transferToUserId
+    ? ((await prisma.user.findUnique({
         where: { id: transferToUserId },
-      });
+        select: { id: true, status: true },
+      })) as { id: number; status: string } | null)
+    : null;
 
-      if (!targetUser) {
-        return NextResponse.json({ error: '目标用户不存在' }, { status: 404 });
-      }
-
-      await prisma.photo.updateMany({
-        where: { uploaderId: id },
-        data: { uploaderId: transferToUserId },
-      });
-    } else {
-      return NextResponse.json(
-        { error: '用户有照片，请选择转移到其他用户或直接删除' },
-        { status: 400 }
-      );
-    }
-  }
-
-  // 删除用户
-  await prisma.user.delete({
-    where: { id },
+  const plan = planUserDelete({
+    photoCount: userToDelete._count.photos,
+    fileCount: userToDelete._count.filesUploaded,
+    fileSetCount: userToDelete._count.fileSetsCreated,
+    photoDecision,
+    driveDecision,
+    transferToUserId,
+    targetUserId: id,
+    isSelf: adminCheck.viewer.id === id,
+    isTargetAdmin: userToDelete.role === 'admin',
+    adminCount,
+    transferTargetExists: receiver !== null,
+    transferTargetActive: receiver?.status === 'active',
   });
 
-  return NextResponse.json({ success: true });
+  if (!plan.ok) {
+    return NextResponse.json(
+      { error: plan.errors.join('；'), errors: plan.errors, code: 'invalid_deletion_request' },
+      { status: 400 }
+    );
+  }
+
+  const receiverId = plan.transferToUserId;
+
+  try {
+    // 三个会 Restrict 的关系全部改指向，P2003 才由构造不可达。
+    //
+    // File 不区分它所在文件集归谁、一律跟着转移：uploaderId 除了"谁上传的"还兼着
+    // "谁能改/删这个文件"（app/api/files/[id]/route.ts:95,157）。把它留在一个已经
+    // 不存在的行上，那些文件就永远只能由管理员处置——一个没人选择过的状态。
+    //
+    // 这一步不删任何对象：用户删除只转移资产、不销毁资产，所以这条路径上不存在
+    // "删了行没删对象"的泄漏（issue #15 / #5 Bug 3 报的那条由构造消失）。
+    if (receiverId !== undefined) {
+      await prisma.photo.updateMany({
+        where: { uploaderId: id },
+        data: { uploaderId: receiverId },
+      });
+      await prisma.file.updateMany({ where: { uploaderId: id }, data: { uploaderId: receiverId } });
+      await prisma.fileSet.updateMany({
+        where: { createdBy: id },
+        data: { createdBy: receiverId },
+      });
+    }
+
+    await prisma.user.delete({ where: { id } });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    // 枚举与写入之间用户又上传了的话，这里会拿到 P2003 → 409，重试即收敛。
+    // 不再额外做一次 count 复查：那只是把同一个竞态窗口挪近一点，并不会关掉它。
+    return prismaErrorResponse(error);
+  }
 }
