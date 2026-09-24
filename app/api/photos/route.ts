@@ -15,6 +15,7 @@ import {
   getPublicThumbnailUrl,
   isNotFoundError,
 } from '@/lib/storage';
+import { idSchema, idStringSchema } from '@/lib/validation';
 import JSZip from 'jszip';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -38,7 +39,7 @@ type PhotoForDeletion = {
   mediaType: 'image' | 'video';
 };
 
-const idArraySchema = z.array(z.number().int().positive()).min(1);
+const idArraySchema = z.array(idSchema).min(1);
 
 const deleteSchema = z.object({
   ids: idArraySchema,
@@ -49,7 +50,7 @@ const downloadSchema = z.object({
 });
 
 const renameSchema = z.object({
-  id: z.number().int().positive(),
+  id: idSchema,
   description: z
     .string()
     .max(300)
@@ -66,10 +67,14 @@ export async function GET(request: Request) {
   const page = Math.max(Number.parseInt(pageParam, 10) || 1, 1);
   const pageSize = Math.min(Math.max(Number.parseInt(pageSizeParam, 10) || 24, 1), 96);
 
-  const parsedCategoryId = categoryIdParam ? Number.parseInt(categoryIdParam, 10) : undefined;
+  const parsedCategoryId =
+    categoryIdParam === null ? undefined : idStringSchema.safeParse(categoryIdParam);
+  if (parsedCategoryId && !parsedCategoryId.success) {
+    return NextResponse.json({ error: '分类 ID 错误' }, { status: 400 });
+  }
   const viewer = await getViewer();
   const where = {
-    ...(Number.isInteger(parsedCategoryId) ? { categoryId: parsedCategoryId } : {}),
+    ...(parsedCategoryId?.success ? { categoryId: parsedCategoryId.data } : {}),
     category: categoryWhereFor(viewer),
   };
 

@@ -91,15 +91,26 @@ export async function persistImage(file: File, mimeType: string) {
 
   const thumbnailKey = buildThumbnailKey(filename, config);
 
-  await Promise.all([
-    originalUpload,
-    client.putObject({
-      bucket: config.bucket,
-      key: thumbnailKey,
-      body: thumbnailBuffer,
-      contentType: 'image/webp',
-    }),
-  ]);
+  try {
+    const uploads = await Promise.allSettled([
+      originalUpload,
+      client.putObject({
+        bucket: config.bucket,
+        key: thumbnailKey,
+        body: thumbnailBuffer,
+        contentType: 'image/webp',
+      }),
+    ]);
+    const failedUpload = uploads.find(result => result.status === 'rejected');
+    if (failedUpload?.status === 'rejected') throw failedUpload.reason;
+  } catch (error) {
+    try {
+      await deleteImageAssets(filename);
+    } catch (cleanupError) {
+      console.error('[persistImage] 上传失败后的对象补偿清理失败', filename, cleanupError);
+    }
+    throw error;
+  }
 
   return {
     filename,
@@ -129,12 +140,21 @@ export async function persistVideo(file: File, mimeType: string) {
   const filename = `${Date.now()}-${randomUUID()}${extension}`;
   const objectKey = buildObjectKey(filename, config);
 
-  await client.putObject({
-    bucket: config.bucket,
-    key: objectKey,
-    body: buffer,
-    contentType: mimeType,
-  });
+  try {
+    await client.putObject({
+      bucket: config.bucket,
+      key: objectKey,
+      body: buffer,
+      contentType: mimeType,
+    });
+  } catch (error) {
+    try {
+      await deleteUploadObject(filename);
+    } catch (cleanupError) {
+      console.error('[persistVideo] 上传失败后的对象补偿清理失败', filename, cleanupError);
+    }
+    throw error;
+  }
 
   return {
     filename,
@@ -189,6 +209,74 @@ export async function deleteUploadObject(filename: string) {
 
 export async function getOriginalBuffer(filename: string) {
   return getObjectBuffer(buildObjectKey(filename, getConfig()));
+}
+
+export function createUploadFilename(name: string, mimeType: string) {
+  return `${Date.now()}-${randomUUID()}${extensionForUpload(name, mimeType)}`;
+}
+
+export function uploadStorageKey(filename: string) {
+  return buildObjectKey(filename, getConfig());
+}
+
+export function uploadThumbnailStorageKey(filename: string) {
+  return buildThumbnailKey(filename, getConfig());
+}
+
+export async function getPresignedPhotoPutUrl(
+  storageKey: string,
+  mimeType: string,
+  expiresSeconds = 900
+) {
+  const config = getConfig();
+  return getClient().getPreSignedUrl({
+    bucket: config.bucket,
+    key: storageKey,
+    method: 'PUT',
+    expires: expiresSeconds,
+    response: { contentType: mimeType },
+  });
+}
+
+export async function inspectUploadObject(storageKey: string) {
+  const result = await getClient().headObject({ bucket: getConfig().bucket, key: storageKey });
+  return {
+    size: Number(result.data['content-length']),
+    contentType: result.data['content-type'],
+  };
+}
+
+export async function getUploadObjectBuffer(storageKey: string) {
+  return getObjectBuffer(storageKey);
+}
+
+export async function createImageThumbnail(thumbnailKey: string, buffer: Buffer) {
+  const config = getConfig();
+  let thumbnailBuffer: Buffer;
+  try {
+    thumbnailBuffer = await sharp(buffer, { sequentialRead: true })
+      .resize(400, 400, { fit: 'inside', withoutEnlargement: true, fastShrinkOnLoad: true })
+      .webp({ quality: 80 })
+      .toBuffer();
+  } catch (error) {
+    console.error('[createImageThumbnail] 图片解码失败', thumbnailKey, error);
+    throw new UploadError('图片内容无法解析，请确认文件确实是图片');
+  }
+  await getClient().putObject({
+    bucket: config.bucket,
+    key: thumbnailKey,
+    body: thumbnailBuffer,
+    contentType: 'image/webp',
+  });
+}
+
+export async function deleteUploadStorageKey(storageKey: string) {
+  const config = getConfig();
+  try {
+    await getClient().deleteObject({ bucket: config.bucket, key: storageKey });
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+  }
 }
 
 export function getPublicObjectUrl(filename: string) {
@@ -319,12 +407,21 @@ export async function persistFile(file: File) {
   const filename = `${Date.now()}-${randomUUID()}${extension}`;
   const objectKey = buildFileObjectKey(filename, config);
 
-  await client.putObject({
-    bucket: config.bucket,
-    key: objectKey,
-    body: buffer,
-    contentType: file.type || 'application/octet-stream',
-  });
+  try {
+    await client.putObject({
+      bucket: config.bucket,
+      key: objectKey,
+      body: buffer,
+      contentType: file.type || 'application/octet-stream',
+    });
+  } catch (error) {
+    try {
+      await deleteFileAsset(filename);
+    } catch (cleanupError) {
+      console.error('[persistFile] 上传失败后的对象补偿清理失败', filename, cleanupError);
+    }
+    throw error;
+  }
 
   return {
     filename,
@@ -379,7 +476,7 @@ function sanitizeName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-export async function getPresignedPutUrl(storageKey: string, mime: string, size?: number) {
+export async function getPresignedPutUrl(storageKey: string, mime: string) {
   const config = getConfig();
   const client = getClient();
   const expires = config.presignExpiresSeconds ?? 900;

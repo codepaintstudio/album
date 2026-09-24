@@ -1,4 +1,4 @@
-import { idSchema, optionalIdSchema, visibilitySchema } from '@/lib/validation';
+import { idSchema, idStringSchema, optionalIdSchema, visibilitySchema } from '@/lib/validation';
 import { describe, expect, it } from 'vitest';
 
 describe('idSchema', () => {
@@ -46,6 +46,19 @@ describe('idSchema', () => {
     expect(idSchema.safeParse(0).error?.issues[0].message).toBe('ID 必须为正整数');
     expect(idSchema.safeParse(1.5).error?.issues[0].message).toBe('ID 必须是整数');
     expect(idSchema.safeParse(3000000000).error?.issues[0].message).toBe('ID 超出范围');
+  });
+});
+
+describe('idStringSchema（路径与 query 参数）', () => {
+  it('接受十进制正整数并统一转成数据库 int', () => {
+    expect(idStringSchema.parse('1')).toBe(1);
+    expect(idStringSchema.parse('2147483647')).toBe(2147483647);
+  });
+
+  it('拒绝空白、前后缀、零、负数、小数与超范围值', () => {
+    for (const value of ['', ' 1', '1 ', '1abc', '1.5', '0', '-1', '2147483648']) {
+      expect(idStringSchema.safeParse(value).success).toBe(false);
+    }
   });
 });
 

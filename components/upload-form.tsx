@@ -96,26 +96,48 @@ export function UploadForm({ categories, defaultCategoryId, onSuccess }: UploadF
       const file = files.item(index);
       if (!file) continue;
 
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('categoryId', categoryId);
-      if (description.trim()) {
-        formData.append('description', description.trim());
-      }
-
       try {
-        const response = await fetch('/api/upload', {
+        const tokenResponse = await fetch('/api/upload/token', {
           method: 'POST',
-          body: formData,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            categoryId: Number(categoryId),
+            name: file.name,
+            description: description.trim() || undefined,
+            mimeType: file.type,
+            size: file.size,
+          }),
+        });
+        const token = await tokenResponse.json();
+        if (!tokenResponse.ok) throw new Error(token.error ?? '无法创建上传凭证');
+
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('PUT', token.uploadUrl);
+          xhr.setRequestHeader('Content-Type', token.headers['Content-Type']);
+          xhr.upload.onprogress = progressEvent => {
+            if (progressEvent.lengthComputable) {
+              const percent = (progressEvent.loaded / progressEvent.total) * 100;
+              setProgress(Math.round(((index + percent / 100) / total) * 100));
+            }
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) resolve();
+            else reject(new Error(`对象存储上传失败 (${xhr.status})`));
+          };
+          xhr.onerror = () => reject(new Error('对象存储连接失败'));
+          xhr.onabort = () => reject(new Error('上传已取消'));
+          xhr.send(file);
         });
 
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({ error: '上传失败' }));
-          throw new Error(payload.error ?? '上传失败');
-        }
-
-        const payload = (await response.json()) as UploadedPhoto;
-        uploads.push(payload);
+        const completeResponse = await fetch('/api/upload/complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ intentId: token.intentId }),
+        });
+        const payload = await completeResponse.json();
+        if (!completeResponse.ok) throw new Error(payload.error ?? '上传完成处理失败');
+        uploads.push(payload as UploadedPhoto);
         setProgress(Math.round(((index + 1) / total) * 100));
       } catch (err) {
         const message = err instanceof Error ? err.message : '上传失败';

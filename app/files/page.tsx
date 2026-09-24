@@ -5,7 +5,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { requireViewer } from '@/lib/access';
 import { fileSetWhereFor } from '@/lib/access-rules';
 import { prisma } from '@/lib/db';
-import { type SearchParams, readInt, readString } from '@/lib/params';
+import { type SearchParams, readId, readInt, readString } from '@/lib/params';
 import { FileIcon } from 'lucide-react';
 import { Suspense } from 'react';
 
@@ -29,7 +29,7 @@ export default async function FilesPage({ searchParams }: { searchParams: Promis
   })) as FileSetRow[];
 
   // ?fileset= 指向无权访问或不存在的集合时，静默回落到第一个可见集合
-  const requestedId = readInt(params, 'fileset');
+  const requestedId = readId(params, 'fileset');
   const activeSet = fileSets.find(set => set.id === requestedId) ?? fileSets[0] ?? null;
   const query = readString(params, 'q');
 

@@ -2,6 +2,7 @@ import { getViewer } from '@/lib/access';
 import { canViewCategory, categoryWhereFor } from '@/lib/access-rules';
 import { prisma } from '@/lib/db';
 import { getPublicObjectUrl, getPublicThumbnailUrl } from '@/lib/storage';
+import { idStringSchema } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 
 const CATEGORY_LIMIT = 5;
@@ -31,16 +32,19 @@ type PhotoRow = {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const q = (searchParams.get('q') ?? '').trim();
+  const rawCategoryId = searchParams.get('categoryId');
+  const parsedCategoryId =
+    rawCategoryId === null ? undefined : idStringSchema.safeParse(rawCategoryId);
+  if (parsedCategoryId && !parsedCategoryId.success) {
+    return NextResponse.json({ error: '分类 ID 错误' }, { status: 400 });
+  }
   if (!q) {
     return NextResponse.json({ categories: [], photos: [] });
   }
 
   const viewer = await getViewer();
   const categoryFilter = categoryWhereFor(viewer);
-
-  const rawCategoryId = searchParams.get('categoryId');
-  const parsedCategoryId = rawCategoryId ? Number.parseInt(rawCategoryId, 10) : NaN;
-  const scopedCategoryId = Number.isInteger(parsedCategoryId) ? parsedCategoryId : null;
+  const scopedCategoryId = parsedCategoryId?.success ? parsedCategoryId.data : null;
 
   if (scopedCategoryId !== null) {
     const scope = await prisma.category.findUnique({

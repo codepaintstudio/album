@@ -1,6 +1,7 @@
 /**
  * 读取 searchParams 的纯函数。服务端组件与未来的单测共用，不依赖 Next。
  */
+import { idStringSchema } from '@/lib/validation';
 
 export type ParamValue = string | string[] | undefined;
 export type SearchParams = Record<string, ParamValue>;
@@ -16,9 +17,17 @@ export function readString(params: SearchParams, key: string): string {
 
 export function readInt(params: SearchParams, key: string): number | null {
   const raw = first(params[key]);
-  if (!raw) return null;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isInteger(parsed) ? parsed : null;
+  if (!raw || !/^-?\d+$/u.test(raw)) return null;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+/** Reads a strict positive int32 path/query ID. */
+export function readId(params: SearchParams, key: string): number | null {
+  const raw = first(params[key]);
+  if (raw === undefined) return null;
+  const parsed = idStringSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 export function readSort(params: SearchParams): 'asc' | 'desc' {

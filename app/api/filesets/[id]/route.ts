@@ -8,6 +8,7 @@ import {
 import { requireAdmin, requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import { prismaErrorResponse } from '@/lib/prisma-errors';
+import { idStringSchema } from '@/lib/validation';
 import { visibilitySchema } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -24,8 +25,9 @@ const updateSchema = z.object({
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id: idStr } = await params;
-    const id = Number(idStr);
-    if (Number.isNaN(id)) return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
+    const parsedId = idStringSchema.safeParse(idStr);
+    if (!parsedId.success) return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
+    const id = parsedId.data;
 
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
@@ -72,8 +74,9 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id: idStr } = await params;
-    const id = Number(idStr);
-    if (Number.isNaN(id)) return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
+    const parsedId = idStringSchema.safeParse(idStr);
+    if (!parsedId.success) return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
+    const id = parsedId.data;
 
     const adminCheck = await requireAdmin();
     if (!adminCheck.ok) return adminCheck.error;
@@ -118,10 +121,11 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
  */
 export async function DELETE(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: idStr } = await params;
-  const id = Number(idStr);
-  if (!Number.isInteger(id) || id <= 0) {
+  const parsedId = idStringSchema.safeParse(idStr);
+  if (!parsedId.success) {
     return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
   }
+  const id = parsedId.data;
 
   const adminCheck = await requireAdmin();
   if (!adminCheck.ok) return adminCheck.error;

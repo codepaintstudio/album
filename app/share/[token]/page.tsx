@@ -4,7 +4,7 @@ import { PhotoGridSkeleton } from '@/components/skeletons/photo-grid-skeleton';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { EmptyState } from '@/components/ui/empty-state';
 import { prisma } from '@/lib/db';
-import { type SearchParams, clampPage, readInt } from '@/lib/params';
+import { type SearchParams, clampPage, readId, readInt } from '@/lib/params';
 import { isShareUnlocked } from '@/lib/share-auth';
 import { format, isAfter } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
@@ -85,7 +85,7 @@ export default async function SharePage({
           sort="desc"
           page={page}
           total={total}
-          deepPhotoId={readInt(q, 'photo')}
+          deepPhotoId={readId(q, 'photo')}
           viewerId={null}
           canManageAll={false}
           downloadStrategy="public"

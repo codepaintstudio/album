@@ -22,3 +22,10 @@ export const idSchema = z
   .max(MAX_INT32, 'ID 超出范围');
 
 export const optionalIdSchema = idSchema.optional();
+
+/** Path/query/form IDs arrive as decimal strings; reject whitespace, fractions, and suffix junk. */
+export const idStringSchema = z
+  .string()
+  .regex(/^\d+$/u, 'ID 必须是十进制整数')
+  .transform(value => Number(value))
+  .pipe(idSchema);

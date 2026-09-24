@@ -6,6 +6,7 @@ import {
 import { requireAdmin } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import { prismaErrorResponse } from '@/lib/prisma-errors';
+import { selfRegistrationPrivacyResponse } from '@/lib/user-registration';
 import { idSchema, optionalIdSchema } from '@/lib/validation';
 import type { Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
@@ -125,30 +126,41 @@ export async function POST(request: Request) {
     status = 'active';
   }
 
-  const existing = await prisma.user.findUnique({ where: { username: parsed.data.username } });
-  if (existing) {
-    return NextResponse.json({ error: '用户名已存在' }, { status: 409 });
-  }
-
+  const selfRegistration = totalUsers > 0 && (!parsed.data.role || parsed.data.role === 'member');
   const hashed = await bcrypt.hash(parsed.data.password, 10);
 
-  const user = await prisma.user.create({
-    data: {
-      username: parsed.data.username,
-      password: hashed,
-      role,
-      status,
-    },
-    select: {
-      id: true,
-      username: true,
-      role: true,
-      status: true,
-      createdAt: true,
-    },
-  });
+  try {
+    const user = await prisma.user.create({
+      data: {
+        username: parsed.data.username,
+        password: hashed,
+        role,
+        status,
+      },
+      select: {
+        id: true,
+        username: true,
+        role: true,
+        status: true,
+        createdAt: true,
+      },
+    });
 
-  return NextResponse.json(user, { status: 201 });
+    const privacyResponse = selfRegistrationPrivacyResponse(selfRegistration, { ok: true });
+    if (privacyResponse) {
+      return NextResponse.json(privacyResponse.body, { status: privacyResponse.status });
+    }
+    return NextResponse.json(user, { status: 201 });
+  } catch (error) {
+    const privacyResponse = selfRegistrationPrivacyResponse(selfRegistration, {
+      ok: false,
+      error,
+    });
+    if (privacyResponse) {
+      return NextResponse.json(privacyResponse.body, { status: privacyResponse.status });
+    }
+    return prismaErrorResponse(error);
+  }
 }
 
 export async function PUT(request: Request) {
@@ -267,27 +279,22 @@ export async function DELETE(request: Request) {
   const receiverId = plan.transferToUserId;
 
   try {
-    // 三个会 Restrict 的关系全部改指向，P2003 才由构造不可达。
-    //
-    // File 不区分它所在文件集归谁、一律跟着转移：uploaderId 除了"谁上传的"还兼着
-    // "谁能改/删这个文件"（app/api/files/[id]/route.ts:95,157）。把它留在一个已经
-    // 不存在的行上，那些文件就永远只能由管理员处置——一个没人选择过的状态。
-    //
-    // 这一步不删任何对象：用户删除只转移资产、不销毁资产，所以这条路径上不存在
-    // "删了行没删对象"的泄漏（issue #15 / #5 Bug 3 报的那条由构造消失）。
-    if (receiverId !== undefined) {
-      await prisma.photo.updateMany({
-        where: { uploaderId: id },
-        data: { uploaderId: receiverId },
-      });
-      await prisma.file.updateMany({ where: { uploaderId: id }, data: { uploaderId: receiverId } });
-      await prisma.fileSet.updateMany({
-        where: { createdBy: id },
-        data: { createdBy: receiverId },
-      });
-    }
+    // 三个转移和用户删除必须同成同败；语义仍然是只转移、不销毁资产。
+    await prisma.$transaction(async (tx: typeof prisma) => {
+      if (receiverId !== undefined) {
+        await tx.photo.updateMany({
+          where: { uploaderId: id },
+          data: { uploaderId: receiverId },
+        });
+        await tx.file.updateMany({ where: { uploaderId: id }, data: { uploaderId: receiverId } });
+        await tx.fileSet.updateMany({
+          where: { createdBy: id },
+          data: { createdBy: receiverId },
+        });
+      }
 
-    await prisma.user.delete({ where: { id } });
+      await tx.user.delete({ where: { id } });
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

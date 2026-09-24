@@ -165,6 +165,21 @@ function useFileUpload(options: UseFileUploadOptions) {
 
 拆分阶段的原因：让 UI 可以展示「当前在哪一步」。
 
+## 当前代码实现
+
+当前运行流程与上面的早期方案草图略有不同：
+
+1. 已登录客户端向 `POST /api/upload/token` 请求上传凭证。服务端检查分类权限、MIME 类型和声明大小，生成不可由客户端指定的对象键，并创建短时 `UploadIntent`。
+2. 客户端用凭证返回的 URL 和 `Content-Type` 直接向 TOS 执行 `PUT`，并通过 XHR 显示进度。
+3. 客户端向 `POST /api/upload/complete` 提交 `intentId`。服务端验证所有者、权限、凭证有效期和 TOS 对象的大小/MIME；图片由服务端读取并生成 WebP 缩略图，再以数据库事务创建 Photo 并标记凭证完成。唯一关联约束支持安全重试。
+4. 管理员可调用 `POST /api/upload/cleanup` 清除已过期且尚无 Photo 记录的意图及原图/缩略图对象。应由运维定期触发此端点；只有对象清理成功后才删除意图记录。
+
+兼容的 `POST /api/upload` 仍保留原有服务端中转行为；云盘 `/api/files` 不使用此直传流程。部署时需先同步 `prisma/schema.prisma` 并生成 Prisma Client，再开放新流程。
+
+## TOS 跨域配置
+
+浏览器直传前，TOS bucket 必须配置 CORS：允许应用的实际 Origin（生产/预览环境按需逐项配置），允许 `PUT` 方法，并允许请求头 `Content-Type`。浏览器读取上传状态使用 XHR；响应头无需额外暴露给客户端。此仓库只记录要求，不会修改外部 bucket 配置。
+
 ## 兼容性
 
 - **存量文件**：不受影响

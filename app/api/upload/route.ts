@@ -5,16 +5,19 @@ import { AmbiguousMediaError, resolveUploadMedia } from '@/lib/media-type';
 import {
   ConfigurationError,
   UploadError,
+  deleteImageAssets,
+  deleteUploadObject,
   getPublicObjectUrl,
   getPublicThumbnailUrl,
   persistImage,
   persistVideo,
 } from '@/lib/storage';
+import { idStringSchema } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 const uploadSchema = z.object({
-  categoryId: z.coerce.number().int().positive(),
+  categoryId: idStringSchema,
   description: z.string().max(300).optional(),
 });
 
@@ -53,16 +56,19 @@ export async function POST(request: Request) {
 
   const uploaderId = viewer.id;
 
+  let uploadedAsset: { filename: string; kind: 'image' | 'video' } | null = null;
   try {
     // mediaType 与 mimeType 由同一个函数同源产出。旧写法分两处推导：
     // `file.type.startsWith('image/')` 决定 mediaType，`file.type || (isImage ? … : 'video/mp4')`
     // 决定 mimeType。空 type 时 isImage 为 false，于是真图片会掉进 persistVideo 的
     // 视频白名单，被以「仅支持 MP4 / WebM / MOV 视频」这个误导性的 400 拒掉。
     const media = resolveUploadMedia({ name: file.name, declaredType: file.type });
-    const { filename, originalName } =
+    const stored =
       media.kind === 'image'
         ? await persistImage(file, media.mimeType)
         : await persistVideo(file, media.mimeType);
+    const { filename, originalName } = stored;
+    uploadedAsset = { filename, kind: media.kind };
 
     const photo = await prisma.photo.create({
       data: {
@@ -78,6 +84,7 @@ export async function POST(request: Request) {
         uploader: { select: { username: true } },
       },
     });
+    uploadedAsset = null;
 
     return NextResponse.json({
       id: photo.id,
@@ -93,6 +100,18 @@ export async function POST(request: Request) {
       thumbnailUrl: photo.mediaType === 'image' ? getPublicThumbnailUrl(photo.filename) : null,
     });
   } catch (error) {
+    if (uploadedAsset) {
+      try {
+        if (uploadedAsset.kind === 'image') await deleteImageAssets(uploadedAsset.filename);
+        else await deleteUploadObject(uploadedAsset.filename);
+      } catch (cleanupError) {
+        console.error(
+          '[POST /api/upload] DB 写入失败后的对象补偿清理失败',
+          uploadedAsset.filename,
+          cleanupError
+        );
+      }
+    }
     if (error instanceof AmbiguousMediaError) {
       return NextResponse.json(
         { error: error.message, code: 'ambiguous_media_type' },
