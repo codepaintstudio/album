@@ -134,7 +134,10 @@ describe('解析器本身没有静默失配（否则上面所有断言都是空�
     expect(() => fieldLine(schema, 'Photo', 'nonexistent')).toThrow();
   });
 
-  it('工作副本确实带 CRLF，因此上面的归一化不是多余的防御', () => {
-    expect(readFileSync('prisma/schema.prisma', 'utf8')).toContain('\r\n');
+  it('LF 与 CRLF 输入都能归一化后正确解析', () => {
+    const crlfSchema = schema.replace(/\n/g, '\r\n');
+    const normalized = crlfSchema.replace(/\r\n/g, '\n');
+    expect(normalized).toBe(schema);
+    expect(modelBlock(normalized, 'Photo')).toContain('filename');
   });
 });
