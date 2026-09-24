@@ -17,7 +17,7 @@ const updatePasswordSchema = z.object({
 
 export async function PATCH(request: Request) {
   const authCheck = await requireAuth();
-  if ('error' in authCheck) return authCheck.error;
+  if (!authCheck.ok) return authCheck.error;
 
   const body = await request.json().catch(() => null);
   const parsed = parsePayload(body);

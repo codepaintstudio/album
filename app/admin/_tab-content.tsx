@@ -9,6 +9,7 @@ import type {
   ShareLinkItem,
   UserItem,
 } from '@/components/admin/types';
+import { USER_ASSET_COUNT_SELECT, type UserAssetCounts } from '@/lib/asset-deletion';
 import { prisma } from '@/lib/db';
 import { type SearchParams, clampPage, readInt, readString } from '@/lib/params';
 
@@ -31,7 +32,7 @@ type UserRow = {
   role: 'admin' | 'member';
   status: 'pending' | 'active' | 'rejected';
   createdAt: Date;
-  _count: { photos: number };
+  _count: UserAssetCounts;
 };
 
 type ShareLinkRow = {
@@ -59,6 +60,8 @@ function toUserItem(row: UserRow): UserItem {
     role: row.role,
     status: row.status,
     photoCount: row._count.photos,
+    fileCount: row._count.filesUploaded,
+    fileSetCount: row._count.fileSetsCreated,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -137,12 +140,12 @@ export async function AdminTabContent({
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
-        include: { _count: { select: { photos: true } } },
+        include: { _count: { select: { ...USER_ASSET_COUNT_SELECT } } },
       }),
       prisma.user.findMany({
         where: { status: 'pending' },
         orderBy: { createdAt: 'desc' },
-        include: { _count: { select: { photos: true } } },
+        include: { _count: { select: { ...USER_ASSET_COUNT_SELECT } } },
       }),
     ])) as [UserRow[], UserRow[]];
 

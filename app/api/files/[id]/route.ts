@@ -1,7 +1,15 @@
 import { canTouchFileSet } from '@/lib/access-rules';
-import { requireAdmin, requireAuth } from '@/lib/auth-guards';
+import {
+  cleanupErrorResponse,
+  deleteAssetsThenRows,
+  reportSkippedNames,
+} from '@/lib/asset-cleanup';
+import { planFileUnits } from '@/lib/asset-deletion';
+import { requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
-import { deleteFileAsset, getPublicFileUrl } from '@/lib/storage';
+import { prismaErrorResponse } from '@/lib/prisma-errors';
+import { getPublicFileUrl } from '@/lib/storage';
+import { idStringSchema } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -15,8 +23,9 @@ const updateSchema = z.object({
 export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id: idStr } = await params;
-    const id = Number(idStr);
-    if (Number.isNaN(id)) return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
+    const parsedId = idStringSchema.safeParse(idStr);
+    if (!parsedId.success) return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
+    const id = parsedId.data;
 
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
@@ -77,8 +86,9 @@ export async function GET(_: Request, { params }: { params: Promise<{ id: string
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id: idStr } = await params;
-    const id = Number(idStr);
-    if (Number.isNaN(id)) return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
+    const parsedId = idStringSchema.safeParse(idStr);
+    if (!parsedId.success) return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
+    const id = parsedId.data;
 
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
@@ -137,39 +147,43 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
  * DELETE /api/files/:id - Delete file (uploader or admin only)
  */
 export async function DELETE(_: Request, { params }: { params: Promise<{ id: string }> }) {
+  const { id: idStr } = await params;
+  const parsedId = idStringSchema.safeParse(idStr);
+  if (!parsedId.success) {
+    return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
+  }
+  const id = parsedId.data;
+
+  const authCheck = await requireAuth();
+  if (!authCheck.ok) return authCheck.error;
+  const { viewer } = authCheck;
+
+  const file = await prisma.file.findUnique({
+    where: { id },
+    select: { filename: true, uploaderId: true },
+  });
+
+  if (!file) return NextResponse.json({ message: '未找到' }, { status: 404 });
+
+  // Only uploader or admin can delete
+  if (viewer.role !== 'admin' && file.uploaderId !== viewer.id) {
+    return NextResponse.json({ message: '无权限' }, { status: 403 });
+  }
+
+  const plan = planFileUnits([file]);
+  reportSkippedNames('DELETE /api/files/:id', plan.skipped);
+
   try {
-    const { id: idStr } = await params;
-    const id = Number(idStr);
-    if (Number.isNaN(id)) return NextResponse.json({ message: 'ID 错误' }, { status: 400 });
-
-    const authCheck = await requireAuth();
-    if (!authCheck.ok) return authCheck.error;
-    const { viewer } = authCheck;
-
-    const file = await prisma.file.findUnique({
-      where: { id },
-      select: { filename: true, uploaderId: true },
-    });
-
-    if (!file) return NextResponse.json({ message: '未找到' }, { status: 404 });
-
-    // Only uploader or admin can delete
-    if (viewer.role !== 'admin' && file.uploaderId !== viewer.id) {
-      return NextResponse.json({ message: '无权限' }, { status: 403 });
-    }
-
-    // Delete from storage
-    await deleteFileAsset(file.filename);
-
-    // Delete from database
-    await prisma.file.delete({ where: { id } });
+    // 这里原本已是"存储先、库后"，换用同一入口不是为了改顺序，而是为了拿到
+    // 配置预检、失败计数与可区分的状态码：裸 deleteFileAsset 抛错时客户端只能收到
+    // 一句笼统的「删除失败」500，分不清是重试可得还是永远不行。
+    const outcome = await deleteAssetsThenRows(plan.units, () =>
+      prisma.file.delete({ where: { id } })
+    );
+    if (!outcome.ok) return cleanupErrorResponse(outcome, 'message');
 
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    console.error('[DELETE /api/files/:id]', e);
-    if (e?.message === 'Unauthorized') {
-      return NextResponse.json({ message: '未登录' }, { status: 401 });
-    }
-    return NextResponse.json({ message: '删除失败' }, { status: 500 });
+  } catch (error) {
+    return prismaErrorResponse(error, 'message');
   }
 }

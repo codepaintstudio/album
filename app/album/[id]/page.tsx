@@ -6,7 +6,8 @@ import { UploadDialog } from '@/components/upload-dialog';
 import { getViewer } from '@/lib/access';
 import { type Visibility, canViewCategory, categoryWhereFor } from '@/lib/access-rules';
 import { prisma } from '@/lib/db';
-import { type SearchParams, clampPage, readInt, readSort } from '@/lib/params';
+import { type SearchParams, clampPage, readId, readInt, readSort } from '@/lib/params';
+import { idStringSchema } from '@/lib/validation';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import { CalendarClock, CalendarDays, Image as ImageIcon, Images } from 'lucide-react';
@@ -31,10 +32,9 @@ export default async function AlbumPage({
   const { id } = await params;
   const q = (await searchParams) ?? {};
   const sort = readSort(q);
-  const categoryId = Number.parseInt(id, 10);
-  if (!Number.isInteger(categoryId)) {
-    notFound();
-  }
+  const parsedCategoryId = idStringSchema.safeParse(id);
+  if (!parsedCategoryId.success) notFound();
+  const categoryId = parsedCategoryId.data;
 
   const viewer = await getViewer();
 
@@ -67,7 +67,7 @@ export default async function AlbumPage({
   const page = clampPage(readInt(q, 'p'), total, PHOTO_PAGE_SIZE);
   // ?photo= 一般只由客户端浅层写入，这里读一次是为了让深链指向的照片
   // 即使不在当前页窗口里也能打开灯箱
-  const deepPhotoId = readInt(q, 'photo');
+  const deepPhotoId = readId(q, 'photo');
 
   const uploadCategories = viewer
     ? await prisma.category.findMany({

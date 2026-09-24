@@ -12,41 +12,67 @@ datasource db {
 }
 
 model User {
-  id        Int         @id @default(autoincrement())
-  username  String      @unique
-  password  String
-  role      UserRole    @default(member)
-  status    UserStatus  @default(pending)
-  photos    Photo[]
-  fileSetsCreated FileSet[] @relation("UserFileSetCreator")
-  filesUploaded   File[]    @relation("UserFileCreator")
-  createdAt DateTime    @default(now())
+  id              Int        @id @default(autoincrement())
+  username        String     @unique
+  password        String
+  role            UserRole   @default(member)
+  status          UserStatus @default(pending)
+  photos          Photo[]
+  fileSetsCreated FileSet[]  @relation("UserFileSetCreator")
+  filesUploaded   File[]     @relation("UserFileCreator")
+  createdAt       DateTime   @default(now())
 }
 
 model Category {
-  id          Int      @id @default(autoincrement())
+  id          Int                @id @default(autoincrement())
   name        String
   description String?
   visibility  CategoryVisibility @default(internal)
   photos      Photo[]
   shareLinks  ShareLink[]
-  createdAt   DateTime @default(now())
+  createdAt   DateTime           @default(now())
 }
 
 model Photo {
-  id           Int      @id @default(autoincrement())
-  filename     String
-  originalName String
-  description  String?
-  categoryId   Int
-  uploaderId   Int
-  mediaType    MediaType @default(image)
-  mimeType     String
-  category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  uploader     User     @relation(fields: [uploaderId], references: [id])
-  createdAt    DateTime @default(now())
+  id             Int           @id @default(autoincrement())
+  filename       String
+  originalName   String
+  description    String?
+  categoryId     Int
+  uploaderId     Int
+  mediaType      MediaType     @default(image)
+  mimeType       String
+  uploadIntentId String?       @unique @db.VarChar(36)
+  uploadIntent   UploadIntent? @relation(fields: [uploadIntentId], references: [id], onDelete: SetNull)
+  category       Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  // 归属关系刻意不加 onDelete：Cascade 会让子行在库内消失，应用代码从此读不到
+  // filename，那些对象就成了永久且不可追溯的泄漏（缺陷 B 的成因正是已经存在的
+  // Cascade）。默认 Restrict 反而是安全的：它逼着删除方先处置子行。
+  // 这条不变量由 __tests__/schema-invariants.test.ts 钉住。
+  uploader       User          @relation(fields: [uploaderId], references: [id])
+  createdAt      DateTime      @default(now())
 
   @@index([categoryId, createdAt])
+}
+
+model UploadIntent {
+  id           String    @id @default(uuid()) @db.VarChar(36)
+  storageKey   String    @unique @db.VarChar(512)
+  thumbnailKey String?   @db.VarChar(512)
+  // Intentionally scalar snapshots: pending intents must not block user/category deletion.
+  uploaderId   Int
+  categoryId   Int
+  originalName String    @db.VarChar(255)
+  description  String?   @db.VarChar(300)
+  mimeType     String
+  mediaType    MediaType
+  expectedSize Int
+  expiresAt    DateTime
+  completedAt  DateTime?
+  photo        Photo?
+  createdAt    DateTime  @default(now())
+
+  @@index([expiresAt])
 }
 
 model ShareLink {
@@ -96,7 +122,7 @@ model FileSet {
   description String?
   visibility  FileSetVisibility @default(internal)
   createdBy   Int
-  creator     User              @relation("UserFileSetCreator", fields: [createdBy], references: [id])
+  creator     User              @relation("UserFileSetCreator", fields: [createdBy], references: [id]) // 归属关系，理由同 Photo.uploader：不加 onDelete
   files       File[]
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
@@ -106,15 +132,15 @@ model FileSet {
 
 model File {
   id           Int      @id @default(autoincrement())
-  filename     String   // Generated unique filename (like photo filename)
-  originalName String   // Original upload name
+  filename     String // Generated unique filename (like photo filename)
+  originalName String // Original upload name
   description  String?
   mimeType     String
   size         Int
   filesetId    Int
   uploaderId   Int
   fileSet      FileSet  @relation(fields: [filesetId], references: [id], onDelete: Cascade)
-  uploader     User     @relation("UserFileCreator", fields: [uploaderId], references: [id])
+  uploader     User     @relation("UserFileCreator", fields: [uploaderId], references: [id]) // 归属关系，理由同 Photo.uploader：不加 onDelete
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

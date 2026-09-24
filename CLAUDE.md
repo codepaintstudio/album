@@ -91,8 +91,15 @@ All routes follow consistent error handling and validation:
 - `GET/POST/PUT/DELETE /api/categories` - Category CRUD (admin-only for mutations)
 - `GET/DELETE /api/photos` - Photo listing and deletion (ownership checks)
 - `POST /api/share` - Create shareable link with optional password/expiry
-- `GET /api/share?token={token}` - Access shared category (validates password/expiry)
+- `DELETE /api/share` - Revoke a share link by id (admin)
+- `POST /api/share/unlock` - Submit a share password; sets a server-verified HMAC cookie
+  (`lib/share-auth.ts`). Password travels in the request body, never in a query string.
+  Note there is **no** `GET /api/share`: the landing page `app/share/[token]/page.tsx`
+  reads Prisma directly and gates on that cookie.
 - `GET/PUT /api/users` - User management (admin approves/rejects pending users)
+- `DELETE /api/users` - Delete a user; their photos and cloud-drive assets are
+  **transferred** to another user (there is no asset-destroying path; `driveDecision:
+'delete'` is rejected by `planUserDelete`)
 
 ### Component Organization
 
@@ -147,11 +154,32 @@ All routes follow consistent error handling and validation:
 
 ## Technical Constraints
 
-- **No test suite**: Manual testing required (consider adding tests under `__tests__/`)
+- **Tests cover pure logic only**: `pnpm test` runs vitest over `__tests__/`, which is
+  161 cases across 7 files — all of them pure modules (`access-rules`, `media-type`,
+  `asset-deletion`, `prisma-errors`, `validation`, `login-feedback`, `schema-invariants`).
+  **Route handlers cannot be unit-tested here**: `lib/access.ts`, `lib/storage.ts` and
+  `lib/share-auth.ts` all `import 'server-only'`, a package that is not installed (it only
+  type-checks via Next's ambient declaration), and there is no `vi.mock`/`setupFiles`
+  precedent. So put decisions in a pure `lib/*.ts` and keep I/O in the impure half, which
+  is the existing `access-rules.ts` / `access.ts` split. Anything touching TOS or Prisma
+  still needs a machine with `.env` + MySQL + a bucket.
+- **Prisma mistakes are invisible**: `types/prisma-client.d.ts` declares `PrismaClient`
+  with `[key: string]: any` and `*WhereInput = Record<string, unknown>`, so a misspelled
+  `where` field or `_count` relation name passes `tsc` and CI. `__tests__/schema-invariants.test.ts`
+  exists to catch the ones that matter; extend it rather than trusting the type checker.
+- **Two response envelopes coexist** (accepted debt): album/user routes return `{ error }`
+  while cloud-drive routes return `{ message }`, and the clients read exactly those keys.
+  Unifying them means touching 11 routes plus 6 components for a cosmetic inconsistency
+  that breaks nothing, so new error paths keep the file's existing key and add a stable
+  `code` field instead.
 - **Database migrations**: Use `prisma:push` instead of formal migrations
-- **Image formats**: Limited to JPG, PNG, GIF, WebP (enforced in lib/storage.ts:6)
-- **Thumbnail size**: Fixed at 400x400 WebP, quality 80 (lib/storage.ts:63-64)
-- **File size limit**: 10MB per upload (lib/storage.ts:7)
+- **Image formats**: Limited to JPG, PNG, GIF, WebP (allow-list lives in
+  `lib/media-type.ts:ALLOWED_IMAGE_MIME`, consumed by `lib/storage.ts`)
+- **Thumbnail size**: Fixed at 400x400 WebP, quality 80 (`persistImage` in lib/storage.ts)
+- **File size limit**: 10MB per image, 512MB for videos and cloud-drive files
+  (`MAX_FILE_SIZE` / `MAX_VIDEO_FILE_SIZE` / `MAX_GENERAL_FILE_SIZE` in lib/storage.ts)
+- **Line endings**: `core.autocrlf=true` with no `.gitattributes`, so a new `.ts` written
+  with CRLF fails `pnpm format:check` locally and in CI. Write new files as LF.
 
 ## Integration Points
 

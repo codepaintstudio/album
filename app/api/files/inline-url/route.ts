@@ -2,6 +2,7 @@ import { canTouchFileSet } from '@/lib/access-rules';
 import { requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import { getPresignedInlineFileUrl } from '@/lib/storage';
+import { idStringSchema } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 
 /**
@@ -16,10 +17,11 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url);
     const fileIdStr = url.searchParams.get('fileId');
-    const fileId = fileIdStr ? Number(fileIdStr) : NaN;
-    if (!fileIdStr || Number.isNaN(fileId)) {
-      return NextResponse.json({ message: '缺少 fileId' }, { status: 400 });
+    const parsedFileId = fileIdStr === null ? undefined : idStringSchema.safeParse(fileIdStr);
+    if (!parsedFileId?.success) {
+      return NextResponse.json({ message: 'fileId 错误' }, { status: 400 });
     }
+    const fileId = parsedFileId.data;
 
     // Fetch file and fileset to validate visibility
     const file = await prisma.file.findUnique({

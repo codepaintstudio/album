@@ -5,6 +5,8 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ErrorAlert } from '@/components/ui/error-alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { LOGIN_FEEDBACK_TEXT, classifySignInError, isAccountBlocked } from '@/lib/login-feedback';
+import type { LoginFeedback } from '@/lib/login-feedback';
 import { signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, useState } from 'react';
@@ -15,31 +17,17 @@ export function LoginForm({ onSuccess }: { onSuccess?: () => void } = {}) {
   const callbackUrl = params.get('callbackUrl') ?? '/';
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [pendingHint, setPendingHint] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<LoginFeedback | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setError(null);
+    setFeedback(null);
     setIsLoading(true);
     try {
-      setPendingHint(null);
-      // 先检查账户状态，避免不必要的登录尝试
-      const check = await fetch('/api/users/check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username }),
-      })
-        .then(r => r.json())
-        .catch(() => ({}));
-
-      if (check?.status === 'pending') {
-        setPendingHint('账户待审核，请等待管理员通过');
-        setIsLoading(false);
-        return;
-      }
-
+      // 不再在登录前先探测一次账户状态：那需要一个未鉴权的接口回答"这个用户名存在吗、
+      // 审核过了吗"，任何人都能拿它枚举账号；而 signIn 在密码正确时本来就会带回同一个
+      // 结论（lib/auth.ts 的 authorize 抛出待审核/已拒绝）。代价是一次 bcrypt.compare。
       const response = await signIn('credentials', {
         username,
         password,
@@ -48,13 +36,7 @@ export function LoginForm({ onSuccess }: { onSuccess?: () => void } = {}) {
       });
 
       if (response?.error) {
-        if (response.error.includes('待审核') || response.error.includes('审核')) {
-          setError(null);
-          setPendingHint('账户待审核，请等待管理员通过');
-        } else {
-          setError('用户名或密码错误');
-        }
-        setIsLoading(false);
+        setFeedback(classifySignInError(response.error));
         return;
       }
 
@@ -90,13 +72,15 @@ export function LoginForm({ onSuccess }: { onSuccess?: () => void } = {}) {
           required
         />
       </div>
-      {error && <ErrorAlert title="登录失败" message={error} />}
-      {pendingHint && (
+      {feedback === 'invalid' ? (
+        <ErrorAlert title="登录失败" message={LOGIN_FEEDBACK_TEXT.invalid} />
+      ) : null}
+      {feedback && isAccountBlocked(feedback) ? (
         <Alert>
           <AlertTitle>登录受限</AlertTitle>
-          <AlertDescription>{pendingHint}</AlertDescription>
+          <AlertDescription>{LOGIN_FEEDBACK_TEXT[feedback]}</AlertDescription>
         </Alert>
-      )}
+      ) : null}
       <LoadingButton type="submit" className="w-full" loading={isLoading}>
         登录
       </LoadingButton>

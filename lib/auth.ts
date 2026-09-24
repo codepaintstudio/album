@@ -5,6 +5,7 @@ import Credentials from 'next-auth/providers/credentials';
 import { cache } from 'react';
 
 import { prisma } from './db';
+import { LOGIN_FEEDBACK_TEXT } from './login-feedback';
 
 export const authOptions: NextAuthOptions = {
   session: {
@@ -38,13 +39,14 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
-        // 检查账户状态
+        // 检查账户状态。文案取自 lib/login-feedback.ts：抛出的是散文、匹配回的也是
+        // 散文，两处各写一遍时改文案会静默把某个分支降级成"用户名或密码错误"。
         if (user.status === 'pending') {
-          throw new Error('账户待审核，请等待管理员通过');
+          throw new Error(LOGIN_FEEDBACK_TEXT.pending);
         }
 
         if (user.status === 'rejected') {
-          throw new Error('账户已被拒绝，无法登录');
+          throw new Error(LOGIN_FEEDBACK_TEXT.rejected);
         }
 
         return {

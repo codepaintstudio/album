@@ -1,17 +1,18 @@
 import { requireAdmin } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
+import { idSchema } from '@/lib/validation';
 import bcrypt from 'bcryptjs';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 const resetPasswordSchema = z.object({
-  userId: z.number().int(),
+  userId: idSchema,
   newPassword: z.string().min(6, '密码至少 6 位'),
 });
 
 export async function POST(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parsed = resetPasswordSchema.safeParse(body);

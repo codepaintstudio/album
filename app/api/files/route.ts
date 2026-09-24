@@ -2,6 +2,7 @@ import { canTouchFileSet } from '@/lib/access-rules';
 import { requireAuth } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
 import { deleteFileAsset, getPublicFileUrl, persistFile } from '@/lib/storage';
+import { idStringSchema } from '@/lib/validation';
 import { NextResponse } from 'next/server';
 
 type FileItem = {
@@ -26,16 +27,22 @@ export async function GET(req: Request) {
     const { viewer } = authCheck;
 
     const url = new URL(req.url);
-    const filesetId = url.searchParams.get('filesetId');
+    const filesetIdParam = url.searchParams.get('filesetId');
     const q = url.searchParams.get('q');
+    const parsedFilesetId =
+      filesetIdParam === null ? undefined : idStringSchema.safeParse(filesetIdParam);
 
-    if (!filesetId) {
-      return NextResponse.json({ message: '缺少 filesetId' }, { status: 400 });
+    if (!parsedFilesetId?.success) {
+      return NextResponse.json(
+        { message: filesetIdParam === null ? '缺少 filesetId' : 'filesetId 错误' },
+        { status: 400 }
+      );
     }
+    const filesetId = parsedFilesetId.data;
 
     // Check fileset access permission
     const fileset = await prisma.fileSet.findUnique({
-      where: { id: Number(filesetId) },
+      where: { id: filesetId },
       select: { id: true, visibility: true, createdBy: true },
     });
 
@@ -47,7 +54,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ message: '无权限' }, { status: 403 });
     }
 
-    const where: any = { filesetId: Number(filesetId) };
+    const where: any = { filesetId };
     if (q) where.originalName = { contains: q };
 
     const items = (await prisma.file.findMany({
@@ -87,21 +94,25 @@ export async function GET(req: Request) {
  * Uses multipart/form-data
  */
 export async function POST(req: Request) {
+  let uploadedFilename: string | null = null;
   try {
     const authCheck = await requireAuth();
     if (!authCheck.ok) return authCheck.error;
     const { viewer } = authCheck;
 
     const formData = await req.formData();
-    const file = formData.get('file') as File | null;
-    const filesetIdStr = formData.get('filesetId') as string | null;
+    const file = formData.get('file');
+    const filesetIdValue = formData.get('filesetId');
     const description = (formData.get('description') as string | null) || undefined;
 
-    if (!file || !filesetIdStr) {
+    if (!(file instanceof File) || typeof filesetIdValue !== 'string') {
       return NextResponse.json({ message: '缺少文件或文件集ID' }, { status: 400 });
     }
-
-    const filesetId = Number(filesetIdStr);
+    const parsedFilesetId = idStringSchema.safeParse(filesetIdValue);
+    if (!parsedFilesetId.success) {
+      return NextResponse.json({ message: 'filesetId 错误' }, { status: 400 });
+    }
+    const filesetId = parsedFilesetId.data;
 
     // Check fileset exists and has permission
     const fileset = await prisma.fileSet.findUnique({
@@ -119,6 +130,7 @@ export async function POST(req: Request) {
 
     // Upload file to storage
     const { filename, originalName } = await persistFile(file);
+    uploadedFilename = filename;
 
     // Create file record
     const created = await prisma.file.create({
@@ -141,6 +153,7 @@ export async function POST(req: Request) {
         createdAt: true,
       },
     });
+    uploadedFilename = null;
 
     return NextResponse.json(
       {
@@ -152,6 +165,17 @@ export async function POST(req: Request) {
       { status: 201 }
     );
   } catch (e: any) {
+    if (uploadedFilename) {
+      try {
+        await deleteFileAsset(uploadedFilename);
+      } catch (cleanupError) {
+        console.error(
+          '[POST /api/files] DB 写入失败后的对象补偿清理失败',
+          uploadedFilename,
+          cleanupError
+        );
+      }
+    }
     console.error('[POST /api/files]', e);
     if (e?.message === 'Unauthorized') {
       return NextResponse.json({ message: '未登录' }, { status: 401 });

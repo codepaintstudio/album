@@ -1,5 +1,13 @@
+import {
+  USER_ASSET_COUNT_SELECT,
+  type UserAssetCounts,
+  planUserDelete,
+} from '@/lib/asset-deletion';
 import { requireAdmin } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
+import { prismaErrorResponse } from '@/lib/prisma-errors';
+import { selfRegistrationPrivacyResponse } from '@/lib/user-registration';
+import { idSchema, optionalIdSchema } from '@/lib/validation';
 import type { Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { NextResponse } from 'next/server';
@@ -21,24 +29,25 @@ const createUserSchema = z.object({
 });
 
 const updateRoleSchema = z.object({
-  id: z.number().int(),
+  id: idSchema,
   role: z.enum(['admin', 'member']),
 });
 
 const updateStatusSchema = z.object({
-  id: z.number().int(),
+  id: idSchema,
   status: z.enum(['pending', 'active', 'rejected']),
 });
 
 const deleteUserSchema = z.object({
-  id: z.number().int(),
-  transferToUserId: z.number().int().optional(),
-  deletePhotos: z.boolean().optional(),
+  id: idSchema,
+  photoDecision: z.enum(['transfer', 'delete']).optional(),
+  driveDecision: z.enum(['transfer', 'delete']).optional(),
+  transferToUserId: optionalIdSchema,
 });
 
 export async function GET(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const { searchParams } = new URL(request.url);
   const pageParam = searchParams.get('page') ?? '1';
@@ -111,41 +120,52 @@ export async function POST(request: Request) {
     status = 'active';
   } else if (parsed.data.role && parsed.data.role !== 'member') {
     const adminCheck = await requireAdmin();
-    if ('error' in adminCheck) {
+    if (!adminCheck.ok) {
       return adminCheck.error;
     }
     status = 'active';
   }
 
-  const existing = await prisma.user.findUnique({ where: { username: parsed.data.username } });
-  if (existing) {
-    return NextResponse.json({ error: '用户名已存在' }, { status: 409 });
-  }
-
+  const selfRegistration = totalUsers > 0 && (!parsed.data.role || parsed.data.role === 'member');
   const hashed = await bcrypt.hash(parsed.data.password, 10);
 
-  const user = await prisma.user.create({
-    data: {
-      username: parsed.data.username,
-      password: hashed,
-      role,
-      status,
-    },
-    select: {
-      id: true,
-      username: true,
-      role: true,
-      status: true,
-      createdAt: true,
-    },
-  });
+  try {
+    const user = await prisma.user.create({
+      data: {
+        username: parsed.data.username,
+        password: hashed,
+        role,
+        status,
+      },
+      select: {
+        id: true,
+        username: true,
+        role: true,
+        status: true,
+        createdAt: true,
+      },
+    });
 
-  return NextResponse.json(user, { status: 201 });
+    const privacyResponse = selfRegistrationPrivacyResponse(selfRegistration, { ok: true });
+    if (privacyResponse) {
+      return NextResponse.json(privacyResponse.body, { status: privacyResponse.status });
+    }
+    return NextResponse.json(user, { status: 201 });
+  } catch (error) {
+    const privacyResponse = selfRegistrationPrivacyResponse(selfRegistration, {
+      ok: false,
+      error,
+    });
+    if (privacyResponse) {
+      return NextResponse.json(privacyResponse.body, { status: privacyResponse.status });
+    }
+    return prismaErrorResponse(error);
+  }
 }
 
 export async function PUT(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parsed = updateRoleSchema.safeParse(body);
@@ -153,23 +173,27 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: '请求参数错误' }, { status: 400 });
   }
 
-  const user = await prisma.user.update({
-    where: { id: parsed.data.id },
-    data: { role: parsed.data.role },
-    select: {
-      id: true,
-      username: true,
-      role: true,
-      createdAt: true,
-    },
-  });
+  try {
+    const user = await prisma.user.update({
+      where: { id: parsed.data.id },
+      data: { role: parsed.data.role },
+      select: {
+        id: true,
+        username: true,
+        role: true,
+        createdAt: true,
+      },
+    });
 
-  return NextResponse.json(user);
+    return NextResponse.json(user);
+  } catch (error) {
+    return prismaErrorResponse(error);
+  }
 }
 
 export async function PATCH(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parsed = updateStatusSchema.safeParse(body);
@@ -177,24 +201,28 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: '请求参数错误' }, { status: 400 });
   }
 
-  const user = await prisma.user.update({
-    where: { id: parsed.data.id },
-    data: { status: parsed.data.status },
-    select: {
-      id: true,
-      username: true,
-      role: true,
-      status: true,
-      createdAt: true,
-    },
-  });
+  try {
+    const user = await prisma.user.update({
+      where: { id: parsed.data.id },
+      data: { status: parsed.data.status },
+      select: {
+        id: true,
+        username: true,
+        role: true,
+        status: true,
+        createdAt: true,
+      },
+    });
 
-  return NextResponse.json(user);
+    return NextResponse.json(user);
+  } catch (error) {
+    return prismaErrorResponse(error);
+  }
 }
 
 export async function DELETE(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parsed = deleteUserSchema.safeParse(body);
@@ -202,51 +230,76 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: '请求参数错误' }, { status: 400 });
   }
 
-  const { id, transferToUserId, deletePhotos } = parsed.data;
+  const { id, photoDecision, driveDecision, transferToUserId } = parsed.data;
 
-  // 检查要删除的用户是否存在
-  const userToDelete = await prisma.user.findUnique({
+  const userToDelete = (await prisma.user.findUnique({
     where: { id },
-    include: { _count: { select: { photos: true } } },
-  });
+    select: {
+      id: true,
+      role: true,
+      _count: { select: { ...USER_ASSET_COUNT_SELECT } },
+    },
+  })) as { id: number; role: string; _count: UserAssetCounts } | null;
 
   if (!userToDelete) {
     return NextResponse.json({ error: '用户不存在' }, { status: 404 });
   }
 
-  // 如果有照片需要处理
-  if (userToDelete._count.photos > 0) {
-    if (deletePhotos) {
-      // 删除该用户的所有照片
-      await prisma.photo.deleteMany({
-        where: { uploaderId: id },
-      });
-    } else if (transferToUserId) {
-      // 转移到指定用户
-      const targetUser = await prisma.user.findUnique({
+  const adminCount = (await prisma.user.count({ where: { role: 'admin' } })) as number;
+
+  const receiver = transferToUserId
+    ? ((await prisma.user.findUnique({
         where: { id: transferToUserId },
-      });
+        select: { id: true, status: true },
+      })) as { id: number; status: string } | null)
+    : null;
 
-      if (!targetUser) {
-        return NextResponse.json({ error: '目标用户不存在' }, { status: 404 });
-      }
-
-      await prisma.photo.updateMany({
-        where: { uploaderId: id },
-        data: { uploaderId: transferToUserId },
-      });
-    } else {
-      return NextResponse.json(
-        { error: '用户有照片，请选择转移到其他用户或直接删除' },
-        { status: 400 }
-      );
-    }
-  }
-
-  // 删除用户
-  await prisma.user.delete({
-    where: { id },
+  const plan = planUserDelete({
+    photoCount: userToDelete._count.photos,
+    fileCount: userToDelete._count.filesUploaded,
+    fileSetCount: userToDelete._count.fileSetsCreated,
+    photoDecision,
+    driveDecision,
+    transferToUserId,
+    targetUserId: id,
+    isSelf: adminCheck.viewer.id === id,
+    isTargetAdmin: userToDelete.role === 'admin',
+    adminCount,
+    transferTargetExists: receiver !== null,
+    transferTargetActive: receiver?.status === 'active',
   });
 
-  return NextResponse.json({ success: true });
+  if (!plan.ok) {
+    return NextResponse.json(
+      { error: plan.errors.join('；'), errors: plan.errors, code: 'invalid_deletion_request' },
+      { status: 400 }
+    );
+  }
+
+  const receiverId = plan.transferToUserId;
+
+  try {
+    // 三个转移和用户删除必须同成同败；语义仍然是只转移、不销毁资产。
+    await prisma.$transaction(async (tx: typeof prisma) => {
+      if (receiverId !== undefined) {
+        await tx.photo.updateMany({
+          where: { uploaderId: id },
+          data: { uploaderId: receiverId },
+        });
+        await tx.file.updateMany({ where: { uploaderId: id }, data: { uploaderId: receiverId } });
+        await tx.fileSet.updateMany({
+          where: { createdBy: id },
+          data: { createdBy: receiverId },
+        });
+      }
+
+      await tx.user.delete({ where: { id } });
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    // 枚举与写入之间用户又上传了的话，这里会拿到 P2003 → 409，重试即收敛。
+    // 不再额外做一次 count 复查：那只是把同一个竞态窗口挪近一点，并不会关掉它。
+    return prismaErrorResponse(error);
+  }
 }

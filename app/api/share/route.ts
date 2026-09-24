@@ -1,53 +1,43 @@
 import { requireAdmin } from '@/lib/auth-guards';
 import { prisma } from '@/lib/db';
-import { ConfigurationError, getPublicObjectUrl, getPublicThumbnailUrl } from '@/lib/storage';
+import { idSchema } from '@/lib/validation';
 import bcrypt from 'bcryptjs';
-import { addHours, isAfter } from 'date-fns';
+import { addHours } from 'date-fns';
 import { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 
-type SharedPhoto = {
-  id: number;
-  filename: string;
-  originalName: string;
-  description: string | null;
-  createdAt: Date;
-  mediaType: 'image' | 'video';
-  mimeType: string;
-  uploader: { username: string };
-};
-
-type ShareLinkWithCategory = {
-  token: string;
-  expiresAt: Date | null;
-  password?: string | null;
-  category: {
-    id: number;
-    name: string;
-    description: string | null;
-    photos: SharedPhoto[];
-  };
-};
+/**
+ * 只有两个方法：POST 创建分享链接，DELETE 撤销它。
+ *
+ * 原来还有一个 GET /api/share?token=…&password=…，一次返回整册的照片元数据与可访问
+ * fileUrl。它被删掉而不是被修，三条理由：
+ *
+ * 1. 没有调用方。分享落地页 app/share/[token]/page.tsx 直接查 Prisma，门禁由
+ *    lib/share-auth.ts 在服务端用 HMAC cookie 判定；admin-share-tab 只发 POST 与
+ *    DELETE。留下的是一份没人用的重复实现，还得跟着 token/过期/密码逻辑一起维护。
+ * 2. 它把密码放在查询串里。兄弟路由 app/api/share/unlock/route.ts 的注释早已写明
+ *    本项目的政策：「密码走请求体而不是查询串：查询串会留在浏览器历史与服务器访问
+ *    日志里」。所以这不是一个被权衡过的设计，是同一族重构做了一半。
+ * 3. 它无鉴权也无限流，任何拿到 token 的人都能一次取回整册清单。
+ *
+ * 若确有外部集成在用这个 URL，它会开始收到 405。对外承诺的入口一直是分享落地页本身
+ * （admin-share-tab 复制给用户的就是那个页面地址）。
+ */
 
 const createShareSchema = z.object({
-  categoryId: z.number().int(),
+  categoryId: idSchema,
   password: z.string().min(4).max(50).optional(),
   expireInHours: z.number().int().positive().max(720).optional(),
 });
 
-const shareAccessSchema = z.object({
-  token: z.string().min(8),
-  password: z.string().optional(),
-});
-
 const deleteShareSchema = z.object({
-  id: z.number().int(),
+  id: idSchema,
 });
 
 export async function POST(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parsed = createShareSchema.safeParse(body);
@@ -89,97 +79,9 @@ export async function POST(request: Request) {
   return NextResponse.json(shareLink, { status: 201 });
 }
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const parsed = shareAccessSchema.safeParse({
-    token: searchParams.get('token'),
-    password: searchParams.get('password') ?? undefined,
-  });
-
-  if (!parsed.success) {
-    return NextResponse.json({ error: '无效的分享链接' }, { status: 400 });
-  }
-
-  const shareLink = (await prisma.shareLink.findUnique({
-    where: { token: parsed.data.token },
-    include: {
-      category: {
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          photos: {
-            orderBy: { createdAt: 'desc' },
-            select: {
-              id: true,
-              filename: true,
-              originalName: true,
-              description: true,
-              createdAt: true,
-              mediaType: true,
-              mimeType: true,
-              uploader: {
-                select: { username: true },
-              },
-            },
-          },
-        },
-      },
-    },
-  })) as ShareLinkWithCategory | null;
-
-  if (!shareLink) {
-    return NextResponse.json({ error: '分享链接不存在' }, { status: 404 });
-  }
-
-  if (shareLink.expiresAt && isAfter(new Date(), shareLink.expiresAt)) {
-    return NextResponse.json({ error: '分享链接已过期' }, { status: 410 });
-  }
-
-  if (shareLink.password) {
-    if (!parsed.data.password) {
-      return NextResponse.json({ error: '需要访问密码' }, { status: 401 });
-    }
-    const match = await bcrypt.compare(parsed.data.password, shareLink.password);
-    if (!match) {
-      return NextResponse.json({ error: '密码错误' }, { status: 401 });
-    }
-  }
-
-  try {
-    return NextResponse.json({
-      token: shareLink.token,
-      expiresAt: shareLink.expiresAt?.toISOString() ?? null,
-      category: {
-        id: shareLink.category.id,
-        name: shareLink.category.name,
-        description: shareLink.category.description,
-        photos: shareLink.category.photos.map(photo => ({
-          id: photo.id,
-          filename: photo.filename,
-          originalName: photo.originalName,
-          description: photo.description,
-          createdAt: photo.createdAt.toISOString(),
-          uploader: photo.uploader.username,
-          mediaType: photo.mediaType,
-          mimeType: photo.mimeType,
-          fileUrl: getPublicObjectUrl(photo.filename),
-          thumbnailUrl: photo.mediaType === 'image' ? getPublicThumbnailUrl(photo.filename) : null,
-        })),
-      },
-    });
-  } catch (error) {
-    if (error instanceof ConfigurationError) {
-      console.error(error);
-      return NextResponse.json({ error: '对象存储配置错误' }, { status: 500 });
-    }
-    throw error;
-  }
-}
-
 export async function DELETE(request: Request) {
   const adminCheck = await requireAdmin();
-  if ('error' in adminCheck) return adminCheck.error;
+  if (!adminCheck.ok) return adminCheck.error;
 
   const body = await request.json().catch(() => null);
   const parsed = deleteShareSchema.safeParse(body);
